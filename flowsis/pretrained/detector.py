@@ -79,6 +79,19 @@ class DetectorForwardResult:
 
 
 @dataclass
+class DetectorFeatureOutput:
+    """Differentiable detector tensors consumed by the set mask model."""
+
+    loss: torch.Tensor | None
+    loss_dict: dict[str, torch.Tensor]
+    detail_features: torch.Tensor
+    feature_maps: tuple[torch.Tensor, ...]
+    query_embeddings: torch.Tensor
+    query_logits: torch.Tensor
+    query_boxes: torch.Tensor
+
+
+@dataclass
 class DetectorInferenceResult:
     detections: list[Detection]
     feature_maps: tuple[torch.Tensor, ...]
@@ -133,6 +146,14 @@ class Detector(Protocol):
         *,
         device_preprocess: bool = False,
     ) -> tuple[torch.Tensor, ...]: ...
+
+    def forward_features(
+        self,
+        pixel_values: torch.Tensor,
+        *,
+        pixel_mask: torch.Tensor | None = None,
+        labels: list[dict[str, torch.Tensor]] | None = None,
+    ) -> DetectorFeatureOutput: ...
 
     def split_backbone_parameters(
         self,
@@ -388,6 +409,127 @@ class BaseDetector(nn.Module):
         pixel_mask: torch.Tensor | None,
     ) -> ModelOutput:
         return self._model(pixel_values=pixel_values, pixel_mask=pixel_mask)
+
+    def _detail_feature_module(self) -> nn.Module:
+        """Resolve the stride-4 stage without changing the detector feature pyramid."""
+        model = getattr(self._model, "model", None)
+        backbone = getattr(getattr(model, "backbone", None), "model", None)
+        encoder = getattr(backbone, "encoder", None)
+        stages = getattr(encoder, "stages", None)
+        if not isinstance(stages, nn.ModuleList) or not stages:
+            raise RuntimeError(
+                f"{self.architecture} does not expose the supported backbone stage "
+                "layout required for stride-4 segmentation features."
+            )
+        return stages[0]
+
+    def forward_features(
+        self,
+        pixel_values: torch.Tensor,
+        *,
+        pixel_mask: torch.Tensor | None = None,
+        labels: list[dict[str, torch.Tensor]] | None = None,
+    ) -> DetectorFeatureOutput:
+        """Run a gradient-preserving detector forward over preprocessed tensors."""
+        if pixel_values.ndim != 4:
+            raise ValueError(
+                "Expected pixel_values shaped [B,C,H,W], "
+                f"got {tuple(pixel_values.shape)}."
+            )
+
+        captured: list[torch.Tensor] = []
+
+        def capture_detail(
+            _module: nn.Module,
+            _inputs: tuple[Any, ...],
+            output: Any,
+        ) -> None:
+            if not isinstance(output, torch.Tensor) or output.ndim != 4:
+                raise RuntimeError(
+                    "The detector stride-4 stage returned an unsupported value."
+                )
+            captured.append(output)
+
+        handle = self._detail_feature_module().register_forward_hook(capture_detail)
+        try:
+            outputs = self._model(
+                pixel_values=pixel_values,
+                pixel_mask=pixel_mask,
+                labels=labels,
+            )
+        finally:
+            handle.remove()
+
+        if len(captured) != 1:
+            raise RuntimeError(
+                "Expected exactly one stride-4 backbone activation, "
+                f"captured {len(captured)}."
+            )
+        detail_features = captured[0]
+        expected_size = (
+            (pixel_values.shape[-2] + 3) // 4,
+            (pixel_values.shape[-1] + 3) // 4,
+        )
+        if detail_features.shape[-2:] != expected_size:
+            raise RuntimeError(
+                "Expected stride-4 detector features with spatial shape "
+                f"{expected_size}, got {tuple(detail_features.shape[-2:])}."
+            )
+
+        query_embeddings = self._extract_query_tensor(outputs, "last_hidden_state")
+        query_logits = self._extract_query_tensor(outputs, "logits")
+        query_boxes = self._extract_query_tensor(outputs, "pred_boxes")
+        if not all(
+            isinstance(value, torch.Tensor)
+            for value in (query_embeddings, query_logits, query_boxes)
+        ):
+            raise RuntimeError(
+                f"{self.architecture} did not expose aligned decoder queries, logits, "
+                "and boxes."
+            )
+        assert query_embeddings is not None
+        assert query_logits is not None
+        assert query_boxes is not None
+        if not (
+            query_embeddings.shape[:2]
+            == query_logits.shape[:2]
+            == query_boxes.shape[:2]
+        ):
+            raise RuntimeError("Detector query outputs do not share their [B,Q] axes.")
+
+        feature_maps = self._extract_feature_maps(outputs)
+        if len(feature_maps) != 3:
+            raise RuntimeError(
+                "Set-mask decoding requires exactly three hybrid-encoder feature "
+                f"levels, received {len(feature_maps)}."
+            )
+        input_height, input_width = pixel_values.shape[-2:]
+        expected_shapes = tuple(
+            (
+                (input_height + stride - 1) // stride,
+                (input_width + stride - 1) // stride,
+            )
+            for stride in (8, 16, 32)
+        )
+        actual_shapes = tuple(feature.shape[-2:] for feature in feature_maps)
+        if actual_shapes != expected_shapes:
+            raise RuntimeError(
+                "Expected detector C8/C16/C32 feature resolutions "
+                f"{expected_shapes}, got {actual_shapes}."
+            )
+        batch_size = pixel_values.shape[0]
+        if any(feature.shape[0] != batch_size for feature in feature_maps):
+            raise RuntimeError("Detector feature levels do not share the input batch.")
+
+        return DetectorFeatureOutput(
+            loss=getattr(outputs, "loss", None),
+            loss_dict=dict(getattr(outputs, "loss_dict", None) or {}),
+            detail_features=detail_features,
+            feature_maps=feature_maps,
+            query_embeddings=query_embeddings,
+            query_logits=query_logits,
+            query_boxes=query_boxes,
+        )
 
     def _extract_feature_maps(self, outputs: ModelOutput) -> tuple[torch.Tensor, ...]:
         raw = getattr(outputs, "encoder_last_hidden_state", None)

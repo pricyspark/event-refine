@@ -13,6 +13,7 @@ import torch.nn as nn
 from PIL import Image
 from transformers.feature_extraction_utils import BatchFeature
 from transformers import RTDetrImageProcessor
+from transformers import __version__ as transformers_version
 
 from flowsis.pretrained import (
     BaseDetector,
@@ -25,6 +26,7 @@ from flowsis.pretrained.image_processing import (
     preprocess_detr_bgr_frame,
     preprocess_detr_images,
 )
+from flowsis.pretrained.common import resolve_pretrained_source
 
 
 class FakeConfig:
@@ -137,6 +139,21 @@ def test_backend_adapters_are_siblings() -> None:
     assert not issubclass(DFineDetector, RTDetrV2Detector)
     assert issubclass(DFineDetector, BaseDetector)
     assert issubclass(RTDetrV2Detector, BaseDetector)
+
+
+def test_supported_transformers_minor_is_pinned() -> None:
+    assert tuple(int(value) for value in transformers_version.split(".")[:2]) == (5, 13)
+
+
+def test_stride4_layout_change_fails_with_contract_error() -> None:
+    detector = build_detector()
+    with pytest.raises(RuntimeError, match="stride-4 segmentation features"):
+        detector.forward_features(torch.zeros(1, 3, 8, 8))
+
+
+def test_missing_local_checkpoint_has_actionable_error() -> None:
+    with pytest.raises(FileNotFoundError, match="Local pretrained model path"):
+        resolve_pretrained_source("outputs/detectors/missing/final")
 
 
 def test_single_tensor_is_one_image() -> None:

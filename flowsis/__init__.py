@@ -2,8 +2,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .base import FlowSISBase
-    from .base_head import MaskHead
-    from .model import FlowSIS
+    from .set_mask import BasePrediction, InstancePrediction, SetMaskHead
 
 
 def __getattr__(name: str) -> Any:
@@ -11,19 +10,20 @@ def __getattr__(name: str) -> Any:
         from .base import FlowSISBase
 
         return FlowSISBase
-    if name == "FlowSIS":
-        from .model import FlowSIS
+    if name in {"BasePrediction", "InstancePrediction", "SetMaskHead"}:
+        from .set_mask import BasePrediction, InstancePrediction, SetMaskHead
 
-        return FlowSIS
-    if name == "MaskHead":
-        from .base_head import MaskHead
-
-        return MaskHead
+        return {
+            "BasePrediction": BasePrediction,
+            "InstancePrediction": InstancePrediction,
+            "SetMaskHead": SetMaskHead,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
     "FlowSISBase",
-    "FlowSIS",
-    "MaskHead",
+    "BasePrediction",
+    "InstancePrediction",
+    "SetMaskHead",
 ]

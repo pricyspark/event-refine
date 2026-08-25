@@ -163,3 +163,42 @@ class LabelPrompts:
                     f"Label {label!r} cannot be used as an embedding filename"
                 )
             torch.save(embedding.cpu(), output_path)
+
+
+def load_prompt_bank(
+    label_names: list[str] | tuple[str, ...],
+    directory: PathLike[str],
+    *,
+    expected_dimension: int = 768,
+) -> torch.Tensor:
+    """Load an ordered, rectangular [classes,prompts,dimension] prompt bank."""
+    embedding_dir = Path(directory)
+    cache: dict[str, torch.Tensor] = {}
+    embeddings = [
+        LabelPrompts.load_embeddings(
+            label,
+            embedding_dir,
+            cache,
+            device=torch.device("cpu"),
+        )
+        for label in label_names
+    ]
+    if not embeddings:
+        raise ValueError("At least one detector label is required for prompt loading.")
+    expected_shape = embeddings[0].shape
+    mismatches = {
+        label: tuple(embedding.shape)
+        for label, embedding in zip(label_names, embeddings, strict=True)
+        if embedding.shape != expected_shape
+    }
+    if mismatches:
+        raise ValueError(
+            "Every detector class must have the same prompt count and dimension; "
+            f"expected {tuple(expected_shape)}, got {mismatches}."
+        )
+    if expected_shape[1] != expected_dimension:
+        raise ValueError(
+            f"Expected {expected_dimension}-dimensional pooled prompt embeddings, "
+            f"received {expected_shape[1]}."
+        )
+    return torch.stack(embeddings)

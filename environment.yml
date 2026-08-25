@@ -16,7 +16,7 @@ dependencies:
   - requests
   - tabulate
   - tensorboard
-  - transformers
+  - transformers >=5.13,<5.14
   - accelerate
   - datasets
   - imagehash

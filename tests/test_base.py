@@ -1,166 +1,148 @@
+from __future__ import annotations
+
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from transformers.feature_extraction_utils import BatchFeature
 
-import flowsis.base as base_module
 from flowsis.base import FlowSISBase
+from flowsis.base_checkpoint import load_base_checkpoint, save_base_checkpoint
+from flowsis.pretrained import DetectorFeatureOutput
+from flowsis.set_mask import SetMaskHead
 
 
 class FakeDetector(nn.Module):
+    architecture = "dfine"
+    source = "fake"
+    image_size = 16
+    label_names = {0: "tool", 1: "other"}
+    model_config = {"model_type": "d_fine", "num_queries": 2}
+
     def __init__(self) -> None:
         super().__init__()
         self.anchor = nn.Parameter(torch.zeros(()))
-        self.label_names = {1: "object"}
-        self.has_detection = True
 
-    def infer_frame(
-        self,
-        frame_bgr: np.ndarray,
-        *,
-        threshold: float,
-        device_preprocess: bool,
-    ) -> Any:
-        if self.has_detection:
-            detections = {
-                "boxes": self.anchor.new_tensor([[1.0, 1.0, 7.0, 7.0]]),
-                "scores": self.anchor.new_tensor([0.9]),
-                "labels": torch.tensor([1], device=self.anchor.device),
-                "query_indices": torch.tensor([1], device=self.anchor.device),
+    def preprocess(self, images: Any, **_: Any) -> BatchFeature:
+        batch_size = len(images) if isinstance(images, list) else 1
+        return BatchFeature(
+            {
+                "pixel_values": self.anchor.new_zeros((batch_size, 3, 16, 16)),
+                "pixel_mask": torch.ones(batch_size, 16, 16, dtype=torch.long),
             }
-        else:
-            detections = {
-                "boxes": self.anchor.new_empty((0, 4)),
-                "scores": self.anchor.new_empty((0,)),
-                "labels": torch.empty(
-                    (0,),
-                    dtype=torch.int64,
-                    device=self.anchor.device,
-                ),
-                "query_indices": torch.empty(
-                    (0,),
-                    dtype=torch.int64,
-                    device=self.anchor.device,
-                ),
-            }
-        return SimpleNamespace(
-            detections=[detections],
-            feature_maps=(self.anchor.new_ones((1, 4, 2, 2)),),
-            query_embeddings=self.anchor.new_tensor(
-                [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]]
-            ),
         )
 
-
-class FakeHead(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.anchor = nn.Parameter(torch.tensor(1.0))
-        self.last_object_queries: torch.Tensor | None = None
-
-    def forward(
+    def forward_features(
         self,
-        feature_maps: list[torch.Tensor],
-        text_embeddings: torch.Tensor,
+        pixel_values: torch.Tensor,
         *,
-        object_boxes: torch.Tensor,
-        object_queries: torch.Tensor | None = None,
-        mask_output_size: tuple[int, int],
-        return_intermediates: bool,
-    ) -> dict[str, torch.Tensor]:
-        self.last_object_queries = object_queries
-        batch_size = feature_maps[0].shape[0]
-        logits = self.anchor.expand(batch_size, *mask_output_size)
-        return {"mask_logits": logits}
+        pixel_mask: torch.Tensor | None = None,
+        labels: list[dict[str, torch.Tensor]] | None = None,
+    ) -> DetectorFeatureOutput:
+        batch_size = pixel_values.shape[0]
+        logits = self.anchor.new_tensor([[[4.0, -4.0], [-4.0, -4.0]]]).expand(
+            batch_size, -1, -1
+        )
+        boxes = self.anchor.new_tensor(
+            [[[0.5, 0.5, 0.5, 0.5], [0.2, 0.2, 0.1, 0.1]]]
+        ).expand(batch_size, -1, -1)
+        return DetectorFeatureOutput(
+            loss=None,
+            loss_dict={},
+            detail_features=self.anchor.new_ones((batch_size, 4, 4, 4)),
+            feature_maps=(
+                self.anchor.new_ones((batch_size, 8, 2, 2)),
+                self.anchor.new_ones((batch_size, 8, 1, 1)),
+                self.anchor.new_ones((batch_size, 8, 1, 1)),
+            ),
+            query_embeddings=self.anchor.new_ones((batch_size, 2, 6)),
+            query_logits=logits,
+            query_boxes=boxes,
+        )
+
+    def save_pretrained(self, output_dir: str | Path) -> None:
+        output = Path(output_dir)
+        (output / "fake_detector").write_text("fake\n")
 
 
-@pytest.fixture
-def model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FlowSISBase:
-    detector = FakeDetector()
-    head = FakeHead()
-    monkeypatch.setattr(base_module, "load_detector", lambda *args, **kwargs: detector)
-    monkeypatch.setattr(
-        base_module, "load_head", lambda *args, **kwargs: (head, tmp_path)
-    )
-    monkeypatch.setattr(
-        base_module.LabelPrompts,
-        "load_embeddings",
-        lambda *args, device, **kwargs: torch.ones(2, 4, device=device),
-    )
+def build_model() -> FlowSISBase:
+    prompt_bank = torch.randn(2, 3, 5)
+    config = {
+        "detail_channels": 4,
+        "feature_channels": (8, 8, 8),
+        "query_dim": 6,
+        "mask_dim": 8,
+    }
     return FlowSISBase(
-        "detector",
-        tmp_path,
-        tmp_path,
-        device="cpu",
-        use_amp=True,
+        FakeDetector(),
+        SetMaskHead(prompt_embeddings=prompt_bank, **config),
+        ("tool", "other"),
+        head_config=config,
+        detection_threshold=0.5,
+        use_amp=False,
     )
 
 
-def test_infer_logits_and_binarization_remain_on_model_device(
-    model: FlowSISBase,
-) -> None:
-    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+def test_forward_preserves_all_queries() -> None:
+    model = build_model()
+    output = model(torch.zeros(2, 3, 16, 16))
+    assert output.mask_logits.shape == (2, 2, 4, 4)
+    assert output.detector.query_logits.shape[:2] == output.mask_logits.shape[:2]
 
-    logits = model.infer_logits(frame)
 
-    assert logits is not None
-    assert logits.shape == (8, 8)
-    assert logits.device == model.device
-    mask = model.binarize_logits(logits)
-    assert mask.dtype == torch.bool
-    assert mask.device == model.device
-    assert mask.all()
-    assert model.previous_selection is not None
-    assert model.current_selection is model.previous_selection
-    assert model.selected_label == "object"
-    assert len(model.history) == 1
-    assert isinstance(model.head, FakeHead)
+def test_infer_returns_unique_instances_and_union() -> None:
+    model = build_model()
+    prediction = model.infer_frame(np.zeros((16, 16, 3), dtype=np.uint8))
+    assert prediction.instances.query_indices.tolist() == [0]
+    assert prediction.instances.mask_logits.shape == (1, 16, 16)
+    assert prediction.union_logits is not None
     torch.testing.assert_close(
-        model.head.last_object_queries,
-        torch.tensor([[5.0, 6.0, 7.0, 8.0]]),
+        prediction.union_logits, prediction.instances.mask_logits[0]
     )
 
 
-def test_infer_returns_none_without_detection_and_reset_clears_state(
-    model: FlowSISBase,
-) -> None:
-    frame = np.zeros((8, 8, 3), dtype=np.uint8)
-    assert model.infer(frame) is not None
+def test_empty_inference_has_no_union() -> None:
+    model = build_model()
+    prediction = model.infer_frame(
+        np.zeros((16, 16, 3), dtype=np.uint8), detection_threshold=0.999
+    )
+    assert prediction.instances.query_indices.numel() == 0
+    assert prediction.union_logits is None
 
-    model.reset()
-    model.detector.has_detection = False
 
-    assert model.infer(frame) is None
-    assert model.previous_selection is None
-    assert model.current_selection is None
-    assert model.selected_label is None
-    assert len(model.history) == 1
+def test_checkpoint_embeds_prompts_and_rejects_legacy(tmp_path: Path) -> None:
+    model = build_model()
+    path = save_base_checkpoint(model, tmp_path)
+    checkpoint, resolved = load_base_checkpoint(path)
+    assert resolved == path
+    assert checkpoint.label_names == ("tool", "other")
+    assert checkpoint.metadata["num_queries"] == 2
+    assert checkpoint.metadata["mask_stride"] == 4
+    torch.testing.assert_close(
+        checkpoint.prompt_embeddings, model.head.prompt_embeddings.cpu()
+    )
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "head.pt").write_bytes(b"legacy")
+    with pytest.raises(ValueError, match="Legacy BaseFusionHead"):
+        load_base_checkpoint(legacy)
 
 
 @pytest.mark.parametrize(
     ("argument", "value"),
-    [
-        ("detection_threshold", -0.1),
-        ("mask_threshold", 1.1),
-        ("history_size", 0),
-        ("image_size", 0),
-    ],
+    [("detection_threshold", -0.1), ("mask_threshold", 1.1), ("max_detections", 0)],
 )
-def test_invalid_configuration_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    argument: str,
-    value: float,
-) -> None:
+def test_invalid_configuration_is_rejected(argument: str, value: float) -> None:
+    detector = FakeDetector()
+    head = SetMaskHead(4, (8, 8, 8), 6, torch.randn(2, 3, 5), mask_dim=8)
     with pytest.raises(ValueError):
         FlowSISBase(
-            "detector",
-            tmp_path,
-            tmp_path,
-            device="cpu",
+            detector,
+            head,
+            ("tool", "other"),
+            head_config={},
             **{argument: value},
         )

@@ -1,21 +1,17 @@
 from .classes import PreparedDataset, CallablePipeline
-from .features import (
-    FeatureBundle,
-    FeatureMetadata,
-    load_feature_bundle,
-    save_feature_bundle,
+from .loaders import (
+    load_object_image,
+    load_object_masks,
+    relocate_segmentation_paths,
 )
-from .loaders import load_object_image, load_object_masks
-from .prompts import LabelPrompts
+from .prompts import LabelPrompts, load_prompt_bank
 
 __all__ = [
     "CallablePipeline",
-    "FeatureBundle",
-    "FeatureMetadata",
     "PreparedDataset",
-    "load_feature_bundle",
     "load_object_image",
     "load_object_masks",
-    "save_feature_bundle",
+    "relocate_segmentation_paths",
     "LabelPrompts",
+    "load_prompt_bank",
 ]

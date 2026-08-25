@@ -14,13 +14,13 @@ include = ["flowsis*"]
 
 [project.scripts]
 flowsis-live-detector = "flowsis.cli.deploy.live_detector:main"
+flowsis-live-base = "flowsis.cli.deploy.live_base:main"
 flowsis-evaluate-detector = "flowsis.cli.eval.evaluate_detector:main"
-flowsis-ablate-text-conditioning = "flowsis.cli.eval.ablate_text_conditioning:main"
+flowsis-evaluate-base = "flowsis.cli.eval.evaluate_base:main"
+flowsis-ablate-base = "flowsis.cli.eval.ablate_base:main"
 flowsis-train-detector = "flowsis.cli.train.train_detector:main"
-flowsis-train-base-head = "flowsis.cli.train.train_base_head:main"
-flowsis-train-recurrent = "flowsis.cli.train.train_recurrent:main"
+flowsis-train-base = "flowsis.cli.train.train_base:main"
 flowsis-visualize-detector-augmentations = "flowsis.cli.train.visualize_detector_augmentations:main"
 flowsis-visualize-detection-dataset = "flowsis.cli.data.visualize_hf_detection_dataset:main"
 flowsis-embed-text-prompts = "flowsis.cli.data.embed_text_prompts:main"
-flowsis-profile-base-head = "flowsis.cli.eval.profile_base_head:main"
 flowsis-profile-base = "flowsis.cli.eval.profile_base:main"

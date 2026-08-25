@@ -1,37 +1,40 @@
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import Mapping
-from pathlib import Path
-from typing import Any, cast
+from collections.abc import Sequence
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any
 
 import torch
 import torch.nn as nn
+import numpy as np
 from numpy.typing import NDArray
+from PIL import Image
 
-from flowsis.data import LabelPrompts
-from flowsis.head_checkpoint import load_head
-from flowsis.pretrained import DetectorArchitecture, load_detector
-from flowsis.selection import SelectionResult, normalize_box, select_detection
-from flowsis.utils import build_autocast_context, get_device
+from flowsis.pretrained.detector import BaseDetector, DetectorImage
+from flowsis.set_mask import (
+    BasePrediction,
+    SetMaskHead,
+    SetMaskOutput,
+    postprocess_set_masks,
+)
+from flowsis.utils import build_autocast_context
 
 
 class FlowSISBase(nn.Module):
-    """Stateful detector-selection and mask-inference pipeline."""
+    """Stateless detector and set-mask model."""
 
     def __init__(
         self,
-        detector_name_or_path: str,
-        head_path: str | Path,
-        text_embeddings_dir: str | Path,
+        detector: BaseDetector,
+        head: SetMaskHead,
+        label_names: Sequence[str],
         *,
-        detector_architecture: DetectorArchitecture | None = None,
+        head_config: dict[str, Any],
         detection_threshold: float = 0.5,
         mask_threshold: float = 0.5,
-        history_size: int = 12,
-        image_size: int = 640,
-        device: str | torch.device | None = None,
+        max_detections: int | None = None,
         use_amp: bool = True,
+        detector_amp: bool = False,
         device_preprocess: bool = True,
     ) -> None:
         super().__init__()
@@ -39,81 +42,145 @@ class FlowSISBase(nn.Module):
             raise ValueError("Detection threshold must be between zero and one.")
         if not 0.0 <= mask_threshold <= 1.0:
             raise ValueError("Mask threshold must be between zero and one.")
-        if history_size <= 0:
-            raise ValueError("History size must be positive.")
-        if image_size <= 0:
-            raise ValueError("Image size must be positive.")
+        if max_detections is not None and max_detections <= 0:
+            raise ValueError("Maximum detections must be positive when provided.")
 
-        self.detector = load_detector(
-            detector_name_or_path,
-            architecture=detector_architecture,
-            image_size=image_size,
+        labels = tuple(label_names)
+        detector_labels = tuple(
+            detector.label_names[index] for index in sorted(detector.label_names)
         )
-        self.head, self.head_checkpoint_path = load_head(head_path)
-        self.text_embeddings_dir = Path(text_embeddings_dir)
-        self.id2label = self.detector.label_names
-        self.prompt_cache: dict[str, torch.Tensor] = {}
-        self.history: deque[Mapping[str, Any]] = deque(maxlen=history_size)
-        self.previous_selection: SelectionResult | None = None
-        self.current_selection: SelectionResult | None = None
-        self.detection_threshold = detection_threshold
-        self.mask_threshold = mask_threshold
-        self.use_amp = use_amp
-        self.device_preprocess = device_preprocess
+        if labels != detector_labels:
+            raise ValueError(
+                "Prompt-bank label order must exactly match detector labels: "
+                f"{labels!r} != {detector_labels!r}."
+            )
+        if len(labels) != head.query_text_fusion.num_classes:
+            raise ValueError(
+                "Prompt-bank class count does not match the detector label count."
+            )
 
-        selected_device = get_device() if device is None else torch.device(device)
-        self.to(selected_device)
-        self.eval()
+        self.detector = detector
+        self.head = head
+        self.label_names = labels
+        self.head_config = dict(head_config)
+        self.detection_threshold = float(detection_threshold)
+        self.mask_threshold = float(mask_threshold)
+        self.max_detections = max_detections
+        self.use_amp = bool(use_amp)
+        self.detector_amp = bool(detector_amp)
+        self.device_preprocess = bool(device_preprocess)
 
     @property
     def device(self) -> torch.device:
         return next(self.head.parameters()).device
 
-    @property
-    def selected_label(self) -> str | None:
-        if self.current_selection is None:
-            return None
-        label = self.current_selection.label
-        return self.id2label.get(label, f"class_{label}")
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        *,
+        pixel_mask: torch.Tensor | None = None,
+        labels: list[dict[str, torch.Tensor]] | None = None,
+        class_weights: torch.Tensor | None = None,
+    ) -> SetMaskOutput:
+        with self.detector_autocast_context():
+            detector_output = self.detector.forward_features(
+                pixel_values,
+                pixel_mask=pixel_mask,
+                labels=labels,
+            )
+        return self.head(detector_output, class_weights=class_weights)
 
-    def reset(self) -> None:
-        """Clear temporal selection state before processing a new stream."""
-        self.history.clear()
-        self.previous_selection = None
-        self.current_selection = None
+    def detector_autocast_context(self) -> AbstractContextManager[None]:
+        """Use FP32 detector math by default, even inside an AMP mask-head pass."""
+        if self.device.type != "cuda":
+            return nullcontext()
+        return torch.autocast("cuda", enabled=self.detector_amp)
+
+    @staticmethod
+    def _image_list(
+        images: DetectorImage | Sequence[DetectorImage],
+    ) -> list[DetectorImage]:
+        if isinstance(images, torch.Tensor) and images.ndim == 4:
+            return list(images)
+        if isinstance(images, (list, tuple)):
+            return list(images)
+        return [images]
+
+    @staticmethod
+    def _image_size(image: DetectorImage) -> tuple[int, int]:
+        if isinstance(image, torch.Tensor):
+            return int(image.shape[-2]), int(image.shape[-1])
+        if isinstance(image, bytes):
+            raise TypeError(
+                "Encoded image bytes are not supported by FlowSISBase.infer."
+            )
+        if isinstance(image, Image.Image):
+            width, height = image.size
+            return int(height), int(width)
+        if not isinstance(image, np.ndarray):
+            raise TypeError(f"Unsupported image type: {type(image).__name__}.")
+        return int(image.shape[0]), int(image.shape[1])
 
     @torch.inference_mode()
-    def predict_logits(
+    def infer(
         self,
-        feature_maps: list[torch.Tensor],
-        text_embeddings: torch.Tensor,
-        box: torch.Tensor,
+        images: DetectorImage | Sequence[DetectorImage],
         *,
-        object_query: torch.Tensor | None = None,
-        output_size: tuple[int, int],
-    ) -> torch.Tensor:
-        """Predict one selected object's mask logits as a device-resident [H,W] tensor."""
-        head_kwargs: dict[str, Any] = {}
-        if object_query is not None:
-            if object_query.ndim == 1:
-                object_query = object_query.unsqueeze(0)
-            head_kwargs["object_queries"] = object_query
-        with build_autocast_context(enabled=self.use_amp, device=self.device):
-            output = self.head(
-                feature_maps,
-                text_embeddings.unsqueeze(0),
-                object_boxes=box,
-                mask_output_size=output_size,
-                return_intermediates=False,
-                **head_kwargs,
-            )
-        mask_logits = cast(torch.Tensor, output["mask_logits"])
-        if mask_logits.ndim != 3 or mask_logits.shape[0] != 1:
-            raise RuntimeError(
-                "FlowSISBase expects one binary mask shaped [1,H,W], "
-                f"but received {tuple(mask_logits.shape)}."
-            )
-        return mask_logits[0]
+        detection_threshold: float | None = None,
+        max_detections: int | None = None,
+    ) -> list[BasePrediction]:
+        image_list = self._image_list(images)
+        image_sizes = [self._image_size(image) for image in image_list]
+        inputs = self.detector.preprocess(
+            image_list,
+            device_preprocess=self.device_preprocess,
+        )
+        pixel_values = inputs["pixel_values"]
+        if not isinstance(pixel_values, torch.Tensor):
+            raise RuntimeError("Detector preprocessing did not return pixel values.")
+        pixel_values = pixel_values.to(self.device)
+        pixel_mask = inputs.get("pixel_mask")
+        if isinstance(pixel_mask, torch.Tensor):
+            pixel_mask = pixel_mask.to(self.device)
+        else:
+            pixel_mask = None
+
+        was_training = self.training
+        self.eval()
+        try:
+            with build_autocast_context(enabled=self.use_amp, device=self.device):
+                output = self(pixel_values, pixel_mask=pixel_mask)
+        finally:
+            self.train(was_training)
+        return postprocess_set_masks(
+            output,
+            image_sizes,
+            detection_threshold=(
+                self.detection_threshold
+                if detection_threshold is None
+                else detection_threshold
+            ),
+            max_detections=(
+                self.max_detections if max_detections is None else max_detections
+            ),
+        )
+
+    @torch.inference_mode()
+    def infer_frame(
+        self,
+        bgr_frame: NDArray,
+        *,
+        detection_threshold: float | None = None,
+        max_detections: int | None = None,
+    ) -> BasePrediction:
+        if bgr_frame.ndim != 3 or bgr_frame.shape[2] != 3:
+            raise ValueError(f"Expected an HWC BGR frame, got {bgr_frame.shape}.")
+        rgb_frame = bgr_frame[..., ::-1].copy()
+        return self.infer(
+            rgb_frame,
+            detection_threshold=detection_threshold,
+            max_detections=max_detections,
+        )[0]
 
     def binarize_logits(
         self,
@@ -121,96 +188,26 @@ class FlowSISBase(nn.Module):
         *,
         threshold: float | None = None,
     ) -> torch.Tensor:
-        """Convert mask logits to a boolean tensor without changing its device."""
         resolved_threshold = self.mask_threshold if threshold is None else threshold
         if not 0.0 <= resolved_threshold <= 1.0:
             raise ValueError("Mask threshold must be between zero and one.")
         return mask_logits.sigmoid() >= resolved_threshold
 
     @torch.inference_mode()
-    def predict_mask(
+    def infer_union(
         self,
-        feature_maps: list[torch.Tensor],
-        text_embeddings: torch.Tensor,
-        box: torch.Tensor,
+        bgr_frame: NDArray,
         *,
-        object_query: torch.Tensor | None = None,
-        output_size: tuple[int, int],
-        mask_threshold: float | None = None,
-    ) -> torch.Tensor:
-        """Predict and binarize one mask, leaving the result on the model device."""
-        logits = self.predict_logits(
-            feature_maps,
-            text_embeddings,
-            box,
-            object_query=object_query,
-            output_size=output_size,
-        )
-        return self.binarize_logits(logits, threshold=mask_threshold)
-
-    @torch.inference_mode()
-    def infer_logits(self, square_bgr: NDArray) -> torch.Tensor | None:
-        """Process one BGR frame and return selected mask logits on the model device."""
-        if square_bgr.ndim != 3 or square_bgr.shape[2] != 3:
-            raise ValueError(f"Expected an HWC BGR frame, got {square_bgr.shape}.")
-        height, width = square_bgr.shape[:2]
-
-        with build_autocast_context(enabled=self.use_amp, device=self.device):
-            inference = self.detector.infer_frame(
-                square_bgr,
-                threshold=self.detection_threshold,
-                device_preprocess=self.device_preprocess,
-            )
-
-        detections = {
-            key: value.detach().cpu().tolist()
-            for key, value in inference.detections[0].items()
-        }
-        self.history.append(detections)
-        selection = select_detection(self.history, self.previous_selection)
-        self.current_selection = selection
-        if selection is None:
-            return None
-
-        selected_label = cast(str, self.selected_label)
-        text_embeddings = LabelPrompts.load_embeddings(
-            selected_label,
-            self.text_embeddings_dir,
-            self.prompt_cache,
-            device=self.device,
-        )
-        box = torch.tensor(
-            [normalize_box(selection, width=width, height=height)],
-            device=self.device,
-            dtype=torch.float32,
-        )
-        object_query = None
-        query_embeddings = getattr(inference, "query_embeddings", None)
-        query_indices = inference.detections[0].get("query_indices")
-        if isinstance(query_embeddings, torch.Tensor) and isinstance(
-            query_indices, torch.Tensor
-        ):
-            raw_query_index = int(query_indices[selection.index].item())
-            object_query = query_embeddings[0, raw_query_index]
-        logits = self.predict_logits(
-            list(inference.feature_maps),
-            text_embeddings,
-            box,
-            object_query=object_query,
-            output_size=(height, width),
-        )
-        self.previous_selection = selection
-        return logits
-
-    @torch.inference_mode()
-    def infer(
-        self,
-        square_bgr: NDArray,
-        *,
+        detection_threshold: float | None = None,
         mask_threshold: float | None = None,
     ) -> torch.Tensor | None:
-        """Process one BGR frame and return a boolean mask on the model device."""
-        logits = self.infer_logits(square_bgr)
-        if logits is None:
+        prediction = self.infer_frame(
+            bgr_frame,
+            detection_threshold=detection_threshold,
+        )
+        if prediction.union_logits is None:
             return None
-        return self.binarize_logits(logits, threshold=mask_threshold)
+        return self.binarize_logits(prediction.union_logits, threshold=mask_threshold)
+
+
+__all__ = ["FlowSISBase"]
