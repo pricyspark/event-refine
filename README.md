@@ -84,6 +84,12 @@ flowsis-train-base --no-box-prior ...
 flowsis-train-base --pixel-detail stride8 ...
 ```
 
+For the staged checkpoint, unfreezing, learning-rate, throughput, and seed
+comparison protocol, see [experiments/BASE_TRAINING.md](experiments/BASE_TRAINING.md).
+The accompanying `experiments/run_base_sweep.sh` writes a reproducible manifest
+and stability/throughput metrics for every run. Its default primary detector is
+the dataset-tuned D-FINE Large checkpoint.
+
 Checkpoints are self-contained model directories. Hugging Face detector files
 and a versioned `base.pt` live together; `base.pt` contains the set-mask weights,
 prompt bank, ordered labels, thresholds, and architecture metadata. External

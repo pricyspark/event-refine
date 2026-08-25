@@ -1,9 +1,14 @@
 import numpy as np
+import pytest
 import torch
 from PIL import Image
 from pathlib import Path
 
-from flowsis.cli.train.train_base import collate_examples
+from flowsis.cli.train.train_base import (
+    collate_examples,
+    resolve_warmup_steps,
+    training_epoch_summary,
+)
 from flowsis.data.loaders import relocate_segmentation_paths
 from flowsis.matching import segmentation_objective
 
@@ -86,3 +91,47 @@ def test_serialized_paths_relocate_between_machines(tmp_path: Path) -> None:
     )
     assert relocated["image_path"] == str(image_path)
     assert relocated["objects"][0]["mask_path"] == str(mask_path)
+
+
+def test_warmup_ratio_scales_with_experiment_length() -> None:
+    assert resolve_warmup_steps(
+        warmup_steps=0,
+        warmup_ratio=0.05,
+        total_steps=101,
+    ) == 5
+
+
+def test_warmup_ratio_and_steps_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="either"):
+        resolve_warmup_steps(
+            warmup_steps=10,
+            warmup_ratio=0.05,
+            total_steps=100,
+        )
+
+
+def test_training_epoch_summary_reports_throughput_and_stability() -> None:
+    summary = training_epoch_summary(
+        loss_sum=6.0,
+        loss_square_sum=14.0,
+        batches=3,
+        images=12,
+        seconds=2.0,
+        grad_norm_sum=9.0,
+        max_grad_norm=5.0,
+        skipped_optimizer_steps=1,
+        peak_memory_mb=1024.0,
+    )
+
+    assert summary == {
+        "train_loss": 2.0,
+        "train_loss_std": pytest.approx((2.0 / 3.0) ** 0.5),
+        "train_batches": 3,
+        "train_images": 12,
+        "train_images_per_second": 6.0,
+        "train_batches_per_second": 1.5,
+        "mean_grad_norm": 3.0,
+        "max_grad_norm": 5.0,
+        "skipped_optimizer_steps": 1,
+        "peak_memory_mb": 1024.0,
+    }

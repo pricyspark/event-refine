@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 from collections.abc import Sequence
 from functools import partial
@@ -27,6 +28,7 @@ from flowsis.cli.common import (
     ensure_split_exists,
     log_event,
 )
+from flowsis.cli.train.training_manifest import write_run_manifest
 from flowsis.data import (
     CallablePipeline,
     PreparedDataset,
@@ -118,6 +120,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-ap50-drop", type=float, default=0.01)
     parser.add_argument("--max-empty-fp-increase", type=float, default=0.05)
     parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument(
+        "--warmup-ratio",
+        type=float,
+        help=(
+            "Warm up for this fraction of optimizer steps. Mutually exclusive "
+            "with a non-zero --warmup-steps value."
+        ),
+    )
+    parser.add_argument(
+        "--scheduler-type",
+        choices=("linear", "cosine", "constant_with_warmup"),
+        default="linear",
+    )
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--gradient-clip", type=float, default=1.0)
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
@@ -550,6 +565,56 @@ def evaluate(
     return {name: total / max(count, 1) for name, total in totals.items()}
 
 
+def synchronize(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def resolve_warmup_steps(
+    *,
+    warmup_steps: int,
+    warmup_ratio: float | None,
+    total_steps: int,
+) -> int:
+    if warmup_steps < 0:
+        raise ValueError("Warmup steps must be non-negative.")
+    if warmup_ratio is None:
+        return warmup_steps
+    if not 0.0 <= warmup_ratio < 1.0:
+        raise ValueError("Warmup ratio must be in [0, 1).")
+    if warmup_steps:
+        raise ValueError("Set either --warmup-steps or --warmup-ratio, not both.")
+    return round(total_steps * warmup_ratio)
+
+
+def training_epoch_summary(
+    *,
+    loss_sum: float,
+    loss_square_sum: float,
+    batches: int,
+    images: int,
+    seconds: float,
+    grad_norm_sum: float,
+    max_grad_norm: float,
+    skipped_optimizer_steps: int,
+    peak_memory_mb: float | None,
+) -> dict[str, float | int | None]:
+    mean_loss = loss_sum / max(batches, 1)
+    loss_variance = max(loss_square_sum / max(batches, 1) - mean_loss**2, 0.0)
+    return {
+        "train_loss": mean_loss,
+        "train_loss_std": math.sqrt(loss_variance),
+        "train_batches": batches,
+        "train_images": images,
+        "train_images_per_second": images / seconds if seconds > 0.0 else 0.0,
+        "train_batches_per_second": batches / seconds if seconds > 0.0 else 0.0,
+        "mean_grad_norm": grad_norm_sum / max(batches, 1),
+        "max_grad_norm": max_grad_norm,
+        "skipped_optimizer_steps": skipped_optimizer_steps,
+        "peak_memory_mb": peak_memory_mb,
+    }
+
+
 def main() -> None:
     args = parse_args()
     if (
@@ -649,14 +714,34 @@ def main() -> None:
     if args.max_steps is not None:
         total_steps = min(total_steps, args.max_steps)
     scheduler = get_scheduler(
-        "linear",
+        args.scheduler_type,
         optimizer=optimizer,
-        num_warmup_steps=args.warmup_steps,
+        num_warmup_steps=resolve_warmup_steps(
+            warmup_steps=args.warmup_steps,
+            warmup_ratio=args.warmup_ratio,
+            total_steps=total_steps,
+        ),
         num_training_steps=max(total_steps, 1),
     )
     scaler = build_grad_scaler(enabled=args.amp, device=device)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    training_log_path = output_dir / "training_log.jsonl"
+    run_config_path = write_run_manifest(
+        output_dir,
+        args,
+        model_config=model.detector.model_config,
+        resolved={
+            "device": str(device),
+            "output_dir": str(output_dir),
+            "detector_architecture": model.detector.architecture,
+            "detector_model_source": model.detector.source,
+            "label_names": label_names,
+            "train_stages": stages,
+            "total_steps": total_steps,
+        },
+    )
+    log_event("saved_run_config", {"path": str(run_config_path)})
     start_epoch = 0
     global_step = 0
     resume_dir = resolve_resume_checkpoint(args.resume_from)
@@ -683,7 +768,13 @@ def main() -> None:
 
     args.max_images = args.max_validation_images
     baseline_quality = evaluate_model(model, validation_loader, args)
-    log_event("baseline_validation", {**baseline, **baseline_quality})
+    baseline_summary = {**baseline, **baseline_quality}
+    log_event("baseline_validation", baseline_summary)
+    append_log_event(
+        training_log_path,
+        "baseline_validation",
+        baseline_summary,
+    )
     best_dice = float("-inf")
     for epoch_index, (stage, stage_epoch, num_stage_epochs) in enumerate(stage_epochs):
         if epoch_index < start_epoch:
@@ -692,9 +783,17 @@ def main() -> None:
             break
         configure_stage(model, stage, backbone_parameters)
         ratio = teacher_ratio(stage, stage_epoch, num_stage_epochs)
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
+        synchronize(device)
         started = time.perf_counter()
         running_loss = 0.0
+        running_loss_square = 0.0
+        running_grad_norm = 0.0
+        maximum_grad_norm = 0.0
         batches = 0
+        images = 0
+        skipped_optimizer_steps = 0
         for batch in train_loader:
             if args.max_steps is not None and global_step >= args.max_steps:
                 break
@@ -707,40 +806,96 @@ def main() -> None:
                     target_text_ratio=ratio,
                     args=args,
                 )
+            if not torch.isfinite(result["loss"]):
+                failure = {
+                    "epoch": epoch_index + 1,
+                    "stage": stage,
+                    "global_step": global_step + 1,
+                    "loss": float(result["loss"].detach().item()),
+                }
+                log_event("nonfinite_loss", failure)
+                append_log_event(training_log_path, "nonfinite_loss", failure)
+                raise FloatingPointError(
+                    f"Non-finite training loss at step {global_step + 1}."
+                )
+            optimizer_step_succeeded = True
             if scaler is None:
                 result["loss"].backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), args.gradient_clip
+                )
+                if not torch.isfinite(grad_norm):
+                    raise FloatingPointError(
+                        f"Non-finite gradient norm at step {global_step + 1}."
+                    )
                 optimizer.step()
             else:
+                scale_before = scaler.get_scale()
                 scaler.scale(result["loss"]).backward()
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), args.gradient_clip
+                )
                 scaler.step(optimizer)
                 scaler.update()
-            scheduler.step()
+                optimizer_step_succeeded = scaler.get_scale() >= scale_before
+                if not optimizer_step_succeeded:
+                    skipped_optimizer_steps += 1
+            if optimizer_step_succeeded:
+                scheduler.step()
             global_step += 1
             batches += 1
-            running_loss += float(result["loss"].item())
+            images += int(batch["batch_size"])
+            loss_value = float(result["loss"].item())
+            grad_norm_value = float(grad_norm.detach().item())
+            running_loss += loss_value
+            running_loss_square += loss_value**2
+            running_grad_norm += grad_norm_value
+            maximum_grad_norm = max(maximum_grad_norm, grad_norm_value)
+        synchronize(device)
+        elapsed = time.perf_counter() - started
+        peak_memory_mb = (
+            torch.cuda.max_memory_allocated(device) / (1024**2)
+            if device.type == "cuda"
+            else None
+        )
         validation = evaluate(model, validation_loader, args)
         quality = evaluate_model(model, validation_loader, args)
-        summary = {
-            "epoch": epoch_index + 1,
-            "stage": stage,
-            "target_text_ratio": ratio,
-            "global_step": global_step,
-            "train_loss": running_loss / max(batches, 1),
-            "seconds": time.perf_counter() - started,
-            **{f"validation_{name}": value for name, value in validation.items()},
-            **{f"validation_{name}": value for name, value in quality.items()},
-        }
-        log_event("epoch", summary)
-        append_log_event(output_dir / "training_log.jsonl", "epoch", summary)
         passes_guardrails = (
             quality["box_ap50"] >= baseline_quality["box_ap50"] - args.max_ap50_drop
             and quality["false_positives_per_empty_image"]
             <= baseline_quality["false_positives_per_empty_image"]
             + args.max_empty_fp_increase
         )
+        summary = {
+            "epoch": epoch_index + 1,
+            "stage": stage,
+            "target_text_ratio": ratio,
+            "global_step": global_step,
+            "seconds": elapsed,
+            "learning_rates": {
+                "head": optimizer.param_groups[0]["lr"],
+                "detector": optimizer.param_groups[1]["lr"],
+                "backbone": optimizer.param_groups[2]["lr"],
+            },
+            "grad_scaler_scale": scaler.get_scale() if scaler is not None else None,
+            "passes_detector_guardrails": passes_guardrails,
+            **training_epoch_summary(
+                loss_sum=running_loss,
+                loss_square_sum=running_loss_square,
+                batches=batches,
+                images=images,
+                seconds=elapsed,
+                grad_norm_sum=running_grad_norm,
+                max_grad_norm=maximum_grad_norm,
+                skipped_optimizer_steps=skipped_optimizer_steps,
+                peak_memory_mb=peak_memory_mb,
+            ),
+            **{f"validation_{name}": value for name, value in validation.items()},
+            **{f"validation_{name}": value for name, value in quality.items()},
+        }
+        log_event("epoch", summary)
+        append_log_event(training_log_path, "epoch", summary)
         matched_dice = float(quality.get("matched_dice", 0.0))
         if passes_guardrails and matched_dice > best_dice:
             best_dice = matched_dice
