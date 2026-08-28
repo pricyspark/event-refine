@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from datasets import Dataset
@@ -29,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", default="test")
     parser.add_argument(
         "--output-path", type=Path, default=Path("outputs/base-eval.json")
+    )
+    parser.add_argument(
+        "--pr-output-dir",
+        type=Path,
+        help="Write box and mask AP50 precision-recall curves as CSV and PNG.",
     )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -116,6 +123,70 @@ def _average_precision(records: list[tuple[float, bool]], targets: int) -> float
     return precision_sum / targets
 
 
+def _precision_recall_curve(
+    records: list[tuple[float, bool]], targets: int
+) -> dict[str, np.ndarray]:
+    ranked = sorted(records, key=lambda item: item[0], reverse=True)
+    scores = np.asarray([score for score, _ in ranked], dtype=np.float64)
+    true_positives = np.asarray(
+        [is_true_positive for _, is_true_positive in ranked], dtype=np.float64
+    )
+    cumulative_true_positives = np.cumsum(true_positives)
+    cumulative_false_positives = np.cumsum(1.0 - true_positives)
+    recall = (
+        cumulative_true_positives / targets
+        if targets
+        else np.zeros_like(cumulative_true_positives)
+    )
+    precision = cumulative_true_positives / np.maximum(
+        cumulative_true_positives + cumulative_false_positives,
+        np.finfo(np.float64).eps,
+    )
+    return {"scores": scores, "recall": recall, "precision": precision}
+
+
+def write_precision_recall_curves(
+    output_dir: Path,
+    curves: dict[str, dict[str, np.ndarray]],
+    average_precision: dict[str, float],
+) -> None:
+    import matplotlib.pyplot as plt
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "precision_recall.csv").open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["metric", "score", "recall", "precision"])
+        for name, curve in curves.items():
+            for score, recall, precision in zip(
+                curve["scores"],
+                curve["recall"],
+                curve["precision"],
+                strict=True,
+            ):
+                writer.writerow([name, score, recall, precision])
+
+    figure, axis = plt.subplots(figsize=(8, 7))
+    for name, curve in curves.items():
+        axis.step(
+            curve["recall"],
+            curve["precision"],
+            where="post",
+            label=f"{name} (AP={average_precision[name]:.3f})",
+        )
+    axis.set(
+        xlim=(0.0, 1.0),
+        ylim=(0.0, 1.01),
+        xlabel="Recall",
+        ylabel="Precision",
+        title="FlowSIS precision-recall at IoU 0.50",
+    )
+    axis.grid(alpha=0.25)
+    axis.legend(loc="lower left")
+    figure.tight_layout()
+    figure.savefig(output_dir / "precision_recall.png", dpi=180)
+    plt.close(figure)
+
+
 def _greedy_ap_records(
     scores: torch.Tensor,
     labels: torch.Tensor,
@@ -145,7 +216,9 @@ def _greedy_ap_records(
 
 
 @torch.inference_mode()
-def evaluate_model(model: Any, loader: Any, args: argparse.Namespace) -> dict[str, Any]:
+def evaluate_model_with_curves(
+    model: Any, loader: Any, args: argparse.Namespace
+) -> tuple[dict[str, Any], dict[str, dict[str, np.ndarray]]]:
     threshold = (
         model.detection_threshold
         if args.detection_threshold is None
@@ -361,6 +434,15 @@ def evaluate_model(model: Any, loader: Any, args: argparse.Namespace) -> dict[st
             },
         }
     )
+    curves = {
+        "box AP50": _precision_recall_curve(box_records, target_count),
+        "mask AP50": _precision_recall_curve(mask_records, target_count),
+    }
+    return summary, curves
+
+
+def evaluate_model(model: Any, loader: Any, args: argparse.Namespace) -> dict[str, Any]:
+    summary, _ = evaluate_model_with_curves(model, loader, args)
     return summary
 
 
@@ -390,10 +472,19 @@ def main() -> None:
     )
     evaluation_dataset = build_dataset(split, data_args, training=False)
     loader = build_dataloader(evaluation_dataset, data_args, training=False)
-    summary = evaluate_model(model, loader, args)
+    summary, curves = evaluate_model_with_curves(model, loader, args)
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     print(text, end="")
     atomic_write_text(args.output_path, text)
+    if args.pr_output_dir is not None:
+        write_precision_recall_curves(
+            args.pr_output_dir,
+            curves,
+            {
+                "box AP50": summary["box_ap50"],
+                "mask AP50": summary["mask_ap50"],
+            },
+        )
 
 
 if __name__ == "__main__":

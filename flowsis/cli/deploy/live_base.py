@@ -47,6 +47,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cpu-preprocess", action="store_true")
     parser.add_argument("--no-display", action="store_true")
+    parser.add_argument(
+        "--display-size",
+        type=int,
+        help=(
+            "Resize the square frame to SIZE x SIZE before inference and rendering "
+            "(for example, 640)."
+        ),
+    )
     parser.add_argument("--max-frames", type=int)
     return parser.parse_args()
 
@@ -120,12 +128,21 @@ def open_writer(path: Path, *, fps: float, size: tuple[int, int]) -> cv2.VideoWr
     return writer
 
 
+def resize_square_frame(frame: np.ndarray, size: int | None) -> np.ndarray:
+    if size is None or frame.shape[:2] == (size, size):
+        return frame
+    interpolation = cv2.INTER_AREA if size < min(frame.shape[:2]) else cv2.INTER_LINEAR
+    return cv2.resize(frame, (size, size), interpolation=interpolation)
+
+
 def main() -> None:
     args = parse_args()
     if not 0.0 <= args.mask_threshold <= 1.0:
         raise ValueError("--mask-threshold must be between zero and one.")
     if not 0.0 <= args.mask_alpha <= 1.0:
         raise ValueError("--mask-alpha must be between zero and one.")
+    if args.display_size is not None and args.display_size <= 0:
+        raise ValueError("--display-size must be positive.")
     if args.no_display and args.output_path is None:
         raise ValueError("--no-display requires --output-path.")
     model = load_base(
@@ -146,6 +163,7 @@ def main() -> None:
             if not ok:
                 break
             frame = center_square(frame)
+            frame = resize_square_frame(frame, args.display_size)
             started = time.perf_counter()
             prediction = model.infer_frame(
                 frame,
