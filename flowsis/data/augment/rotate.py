@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import random
 from typing import Any
 
 import numpy as np
@@ -61,34 +60,40 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     img: Image.Image = example["image"]
     objects = example["objects"]
     width, height = img.size
-    # TODO: add handling for if input has no objects
-
-    # Load masks
-    masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
-    m_union = mask_union(masks)
 
     angle, width_crop, height_crop, dx, dy = sample_rotation_angle(
         width, height, rng, **kwargs
     )
-    # Rotate masks and find crop size
-    m_union_uint8 = m_union.astype(np.uint8, copy=False)
-    m_union_img = Image.fromarray(m_union_uint8)
-    m_union_img_rot = m_union_img.rotate(
+    img_rot = img.rotate(
         angle,
-        resample=Image.Resampling.NEAREST,
+        resample=Image.Resampling.BICUBIC,
         expand=True,
         fillcolor=0,
     )
-    m_union_rot = np.asarray(m_union_img_rot) != 0
-    height_rot, width_rot = m_union_rot.shape
+    width_rot, height_rot = img_rot.size
 
-    # Find crop bounds
-    union_bbox = mask2xywh(m_union_rot)
-    assert union_bbox is not None
-    x, y, w, h = union_bbox
-    bbox_center = np.array((x + w / 2, y + h / 2))
-    frame_center = np.array((width_rot / 2, height_rot / 2))
-    offset = bbox_center - frame_center
+    masks = (
+        np.stack([obj["mask"] for obj in objects]).astype(np.bool_, copy=False)
+        if objects
+        else np.zeros((0, height, width), dtype=np.bool_)
+    )
+    offset = np.zeros(2, dtype=np.float64)
+    if objects:
+        m_union_img = Image.fromarray(mask_union(masks).astype(np.uint8, copy=False))
+        m_union_rot = np.asarray(
+            m_union_img.rotate(
+                angle,
+                resample=Image.Resampling.NEAREST,
+                expand=True,
+                fillcolor=0,
+            )
+        ) != 0
+        union_bbox = mask2xywh(m_union_rot)
+        if union_bbox is not None:
+            x, y, w, h = union_bbox
+            bbox_center = np.array((x + w / 2, y + h / 2))
+            frame_center = np.array((width_rot / 2, height_rot / 2))
+            offset = bbox_center - frame_center
 
     offset_proj = capped_projection(offset, (dx, dy))
     offset_proj = np.trunc(offset_proj).astype(np.int32)
@@ -104,14 +109,6 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         col_start += kwargs["pad"]
         row_end -= kwargs["pad"]
         col_end -= kwargs["pad"]
-
-    # Rotate, crop, and update image
-    img_rot = img.rotate(
-        angle,
-        resample=Image.Resampling.BICUBIC,
-        expand=True,
-        fillcolor=0,
-    )
 
     kept_objects = []
     # Rotate, crop, and update individual objects
@@ -137,13 +134,10 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
         kept_objects.append(obj)
 
-    # TODO: maybe accept empty
     img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
     example["image"] = img_crop
-    if not kept_objects:
-        return example
-
     example["objects"] = kept_objects
+    example["width"], example["height"] = img_crop.size
     example["modified"] = True
 
     return example

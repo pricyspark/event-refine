@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING
-import warnings
 
 import torch
 
@@ -12,8 +12,63 @@ if TYPE_CHECKING:
     from flowsis.pretrained.siglip2 import SigLIP2
 
 
-def apply_template(label: str) -> str:
+def siglip2_pipeline_prompt(label: str) -> str:
+    """Return the exact template used by Transformers' SigLIP2 pipeline."""
     return f"This is a photo of {label}."
+
+
+def build_prompt_suite(
+    taxonomy: Mapping[str, str], descriptions: Mapping[str, str]
+) -> dict[str, list[str]]:
+    """Build the three prompt types used for every canonical tool label."""
+    missing = set(taxonomy) - set(descriptions)
+    extra = set(descriptions) - set(taxonomy)
+    if missing or extra:
+        raise ValueError(
+            "Description labels do not match the dataset taxonomy: "
+            f"missing={sorted(missing)}, extra={sorted(extra)}."
+        )
+    suites = {
+        label: [
+            label,
+            siglip2_pipeline_prompt(label),
+            " ".join(descriptions[label].strip().split()),
+        ]
+        for label in taxonomy
+    }
+    validate_prompt_suite(suites, taxonomy)
+    return suites
+
+
+def validate_prompt_suite(
+    suites: Mapping[str, Sequence[str]], taxonomy: Mapping[str, str]
+) -> None:
+    missing = set(taxonomy) - set(suites)
+    extra = set(suites) - set(taxonomy)
+    if missing or extra:
+        raise ValueError(
+            "Prompt-suite labels do not match the dataset taxonomy: "
+            f"missing={sorted(missing)}, extra={sorted(extra)}."
+        )
+    for label, prompts in suites.items():
+        if len(prompts) != 3:
+            raise ValueError(
+                f"Prompt suite for {label!r} must contain exactly three prompts: "
+                "canonical label, SigLIP2 pipeline template, and visual description."
+            )
+        expected = [label, siglip2_pipeline_prompt(label)]
+        if list(prompts[:2]) != expected:
+            raise ValueError(
+                f"Prompt suite for {label!r} must begin with {expected!r}."
+            )
+        description = prompts[2].strip()
+        if not description or description.casefold() in {
+            label.casefold(),
+            expected[1].casefold(),
+        }:
+            raise ValueError(
+                f"Prompt suite for {label!r} needs a distinct visual description."
+            )
 
 
 class LabelPrompts:
@@ -43,16 +98,27 @@ class LabelPrompts:
             )
         return self._siglip2
 
-    def add(self, label: str, prompt: str) -> None:
-        if label in self.prompts:
-            warnings.warn(f"Label {label} already has prompts. Overwriting.")
-
-        self.prompts[label] = [
-            label,
-            apply_template(label),
-            prompt,
-        ]
-        self.embeddings.pop(label, None)
+    @classmethod
+    def from_mapping(
+        cls,
+        prompts: Mapping[str, Sequence[str]],
+        *,
+        model_name_or_path: str = "google/siglip2-base-patch16-224",
+        device: str | torch.device | None = None,
+    ) -> "LabelPrompts":
+        result = cls(model_name_or_path=model_name_or_path, device=device)
+        for label, values in prompts.items():
+            if (
+                not label
+                or not values
+                or not all(isinstance(value, str) for value in values)
+            ):
+                raise ValueError(
+                    "Each prompt-suite entry must map a nonempty label to "
+                    "a nonempty sequence of strings."
+                )
+            result.prompts[label] = list(values)
+        return result
 
     @classmethod
     def load(
@@ -69,21 +135,19 @@ class LabelPrompts:
         if not isinstance(prompts, dict):
             raise ValueError(f"Expected a JSON object in {input_path}")
 
-        label_prompts = cls(model_name_or_path=model_name_or_path, device=device)
-        for label, prompt_list in prompts.items():
-            if not isinstance(label, str) or not isinstance(prompt_list, list):
-                raise ValueError(
-                    f"Expected each entry in {input_path} to map a label to a list of prompts"
-                )
-            if not prompt_list or not all(
-                isinstance(prompt, str) for prompt in prompt_list
-            ):
-                raise ValueError(
-                    f"Prompts for {label!r} must be a non-empty list of strings"
-                )
-            label_prompts.prompts[label] = prompt_list
-
-        return label_prompts
+        if not all(
+            isinstance(label, str) and isinstance(values, list)
+            for label, values in prompts.items()
+        ):
+            raise ValueError(
+                f"Expected each entry in {input_path} to map a label to a list "
+                "of prompts."
+            )
+        return cls.from_mapping(
+            prompts,
+            model_name_or_path=model_name_or_path,
+            device=device,
+        )
 
     @staticmethod
     def load_embeddings(
@@ -118,40 +182,6 @@ class LabelPrompts:
             for label, prompts in self.prompts.items()
         }
         return self.embeddings
-
-    def dump(
-        self,
-        output_path: PathLike[str],
-        *,
-        indent: int | str | None = None,
-        separators: tuple[str, str] | None = None,
-        sort_keys: bool = False,
-    ) -> None:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with output_path.open("w", encoding="utf-8") as file:
-            json.dump(
-                self.prompts,
-                file,
-                indent=indent,
-                separators=separators,
-                sort_keys=sort_keys,
-            )
-
-    def dumps(
-        self,
-        *,
-        indent: int | str | None = None,
-        separators: tuple[str, str] | None = None,
-        sort_keys: bool = False,
-    ) -> str:
-        return json.dumps(
-            self.prompts,
-            indent=indent,
-            separators=separators,
-            sort_keys=sort_keys,
-        )
 
     def save_embeddings(self, embedding_dir: PathLike[str]) -> None:
         embedding_dir = Path(embedding_dir)

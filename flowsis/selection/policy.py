@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -138,73 +138,9 @@ class TrackSelector:
         )
 
 
-def weights_from_mapping(values: Mapping[str, float]) -> SelectionWeights:
-    unknown = set(values) - set(SelectionWeights.__dataclass_fields__)
-    if unknown:
-        raise ValueError(f"Unknown selector weights: {sorted(unknown)}")
-    return SelectionWeights(**values)
-
-
-def normalize_box(
-    selection: SelectionResult, *, width: int, height: int
-) -> tuple[float, float, float, float]:
-    x1, y1, x2, y2 = selection.box
-    return (
-        max(0.0, min(x1 / width, 1.0)),
-        max(0.0, min(y1 / height, 1.0)),
-        max(0.0, min(x2 / width, 1.0)),
-        max(0.0, min(y2 / height, 1.0)),
-    )
-
-
-def select_detection(
-    detections_log: Sequence[Mapping[str, object]],
-    previous_selection: SelectionResult | None = None,
-) -> SelectionResult | None:
-    """Compatibility wrapper around persistent tracking and the new policy."""
-    from .tracker import SelectionTracker, TrackerConfig
-
-    tracker = SelectionTracker(TrackerConfig(min_hits=1))
-    tracks = []
-    for detections in detections_log[-30:]:
-        tracks = tracker.update(detections)
-    selector = TrackSelector(switch_frames=1)
-    if previous_selection is not None and previous_selection.track_id is not None:
-        selector.selected_track_id = previous_selection.track_id
-    return selector.select(tracks)
-
-
-def select_first_detection(
-    detections_log: Sequence[Mapping[str, object]],
-) -> SelectionResult:
-    result = select_detection(detections_log)
-    if result is None:
-        raise ValueError("No current detection can be selected.")
-    return result
-
-
-def select_recurrent_detection(
-    detections_log: Sequence[Mapping[str, object]],
-    previous_selection: SelectionResult | None = None,
-) -> SelectionResult:
-    result = select_detection(detections_log, previous_selection)
-    if result is None:
-        raise ValueError("No current detection can be selected.")
-    return result
-
-
-select_recurrant_detection = select_recurrent_detection
-
-
 __all__ = [
     "SelectionWeights",
     "TrackSelector",
-    "normalize_box",
     "normalized_entropy",
     "score_track",
-    "select_detection",
-    "select_first_detection",
-    "select_recurrent_detection",
-    "select_recurrant_detection",
-    "weights_from_mapping",
 ]

@@ -1,3 +1,4 @@
+import hashlib
 from typing import Any
 
 
@@ -23,27 +24,12 @@ def get_object_feature_schema(objects_feature: Any) -> Any:
     return schema
 
 
-def resolve_object_source(
-    example: dict[str, Any],
-    *,
-    object_index: int | None = None,
-) -> tuple[int, int]:
-    records = get_object_records(example)
-    if object_index is not None:
-        if object_index < 0 or object_index >= len(records):
-            raise IndexError(
-                f"Object index {object_index} is out of bounds for {len(records)} objects."
-            )
-        record = records[object_index]
-        return int(record["video_id"]), int(record["frame_idx"])
-
-    if len(records) == 1:
-        record = records[0]
-        return int(record["video_id"]), int(record["frame_idx"])
-
-    source_pairs = {(record["video_id"], record["frame_idx"]) for record in records}
-    if len(source_pairs) == 1:
-        video_id, frame_idx = next(iter(source_pairs))
-        return int(video_id), int(frame_idx)
-
-    raise KeyError("Could not resolve a unique object source from the example.")
+def numeric_image_id(value: object, fallback: int = 0) -> int:
+    """Map stable string image IDs to the integer IDs expected by DETR losses."""
+    if value is None or value == "":
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        digest = hashlib.sha256(str(value).encode()).digest()[:8]
+        return int.from_bytes(digest, "big") & ((1 << 63) - 1)

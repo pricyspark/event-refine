@@ -2,14 +2,14 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
-from pathlib import Path
 
 from flowsis.cli.train.train_base import (
     collate_examples,
     resolve_warmup_steps,
     training_epoch_summary,
 )
-from flowsis.data.loaders import relocate_segmentation_paths
+from flowsis.cli.train.train_detector import collate_examples as collate_detections
+from flowsis.data.augment.rotate import rotation_augment
 from flowsis.matching import segmentation_objective
 
 
@@ -52,6 +52,37 @@ def test_all_empty_batch_has_canonical_empty_tensors() -> None:
     assert batch["object_labels"].shape == (0,)
 
 
+def test_collate_hashes_stable_string_image_ids_for_detector_targets() -> None:
+    sample = example([object_record(0, 2)])
+    sample["image_id"] = "image-241ea1b4d217d125"
+
+    base_batch = collate_examples([sample], image_size=16)
+    detector_batch = collate_detections([sample])
+
+    assert isinstance(base_batch["annotations"][0]["image_id"], int)
+    assert (
+        detector_batch["annotations"][0]["image_id"]
+        == base_batch["annotations"][0]["image_id"]
+    )
+
+
+def test_rotation_augmentation_preserves_empty_negative() -> None:
+    result = rotation_augment(
+        {
+            "image": Image.fromarray(np.zeros((12, 16, 3), dtype=np.uint8)),
+            "height": 12,
+            "width": 16,
+            "objects": [],
+            "modified": False,
+        },
+        seed=4,
+    )
+
+    assert result["objects"] == []
+    assert result["image"].size == (result["width"], result["height"])
+    assert result["modified"]
+
+
 def test_object_then_image_loss_reduction_balances_crowding() -> None:
     logits = torch.zeros(3, 2, 2, requires_grad=True)
     targets = torch.stack((torch.zeros(2, 2), torch.ones(2, 2), torch.ones(2, 2)))
@@ -81,32 +112,6 @@ def test_segmentation_loss_ignores_marked_pixels() -> None:
     )
 
     assert float(result["loss"].detach()) < 1e-6
-
-
-def test_serialized_paths_relocate_between_machines(tmp_path: Path) -> None:
-    images_dir = tmp_path / "frames"
-    masks_dir = tmp_path / "masks"
-    (images_dir / "24").mkdir(parents=True)
-    (masks_dir / "24").mkdir(parents=True)
-    image_path = images_dir / "24" / "frame-000266_cluster-0038.jpg"
-    mask_path = masks_dir / "24" / "266.npz"
-    Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(image_path)
-    mask_path.write_bytes(b"mask-placeholder")
-    row = {
-        "image_path": "/another/computer/frames/24/frame-000266_cluster-0038.jpg",
-        "objects": [
-            {
-                "video_id": 24,
-                "frame_idx": 266,
-                "mask_path": "/another/computer/masks/24/266.npz",
-            }
-        ],
-    }
-    relocated = relocate_segmentation_paths(
-        row, images_dir=images_dir, masks_dir=masks_dir
-    )
-    assert relocated["image_path"] == str(image_path)
-    assert relocated["objects"][0]["mask_path"] == str(mask_path)
 
 
 def test_warmup_ratio_scales_with_experiment_length() -> None:

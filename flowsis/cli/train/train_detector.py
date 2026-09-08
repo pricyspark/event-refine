@@ -43,7 +43,11 @@ from flowsis.data import (
     load_object_masks,
 )
 from flowsis.data.images import get_image, get_example_image_source
-from flowsis.data.object_records import get_object_feature_schema, get_object_records
+from flowsis.data.object_records import (
+    get_object_feature_schema,
+    get_object_records,
+    numeric_image_id,
+)
 from flowsis.data.augment import (
     center_square_augment,
     overlap_augment,
@@ -60,7 +64,9 @@ def parse_args() -> argparse.Namespace:
         description="Train a supported detector on the FlowSIS detection dataset."
     )
     add_detector_arguments(parser)
-    parser.add_argument("--dataset-path", type=str, default="data/dataset")
+    parser.add_argument(
+        "--dataset-path", type=str, default="data/new/segmentation-dataset"
+    )
     parser.add_argument("--dataset-name", type=str, default=None)
     parser.add_argument("--dataset-config", type=str, default=None)
     parser.add_argument("--train-split", type=str, default="train")
@@ -158,9 +164,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def dataset_to_annotation(example: dict[str, Any]) -> dict[str, Any]:
+def dataset_to_annotation(
+    example: dict[str, Any], *, fallback_image_id: int = 0
+) -> dict[str, Any]:
     return {
-        "image_id": int(example["image_id"]),
+        "image_id": numeric_image_id(example.get("image_id"), fallback_image_id),
         "annotations": [
             {
                 "bbox": [float(value) for value in object_record["bbox"]],
@@ -184,8 +192,14 @@ def collate_examples(batch: list[dict[str, Any]]) -> dict[str, Any]:
         images = image_tensors
     return {
         "images": images,
-        "annotations": [dataset_to_annotation(example) for example in batch],
-        "image_ids": [int(example["image_id"]) for example in batch],
+        "annotations": [
+            dataset_to_annotation(example, fallback_image_id=index)
+            for index, example in enumerate(batch)
+        ],
+        "image_ids": [
+            numeric_image_id(example.get("image_id"), index)
+            for index, example in enumerate(batch)
+        ],
         "orig_sizes": [
             (int(example["height"]), int(example["width"])) for example in batch
         ],

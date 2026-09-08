@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from flowsis.cli.train.train_temporal import temporal_objective
 from flowsis.temporal import (
     TemporalRefinementBranch,
-    TemporalState,
     warp_backward,
 )
 from flowsis.temporal_checkpoint import (
@@ -115,25 +114,6 @@ def test_initial_refiner_is_exact_base_identity_with_features_and_hidden() -> No
     assert output.hidden_state.shape == (2, 5, 5, 7)
     assert output.visibility_logits is not None
     assert output.visibility_logits.shape == (2, 1)
-
-
-def test_temporal_state_detaches_recurrent_tensors() -> None:
-    branch = TemporalRefinementBranch(channels=(8,))
-    frame = torch.rand(1, 3, 8, 8, requires_grad=True)
-    base_logits = torch.randn(1, 1, 8, 8, requires_grad=True)
-    output = branch(
-        frame,
-        torch.rand_like(frame),
-        base_logits,
-        torch.randn_like(base_logits),
-        torch.zeros(1, 2, 8, 8),
-    )
-
-    state = TemporalState.from_output(frame, output, identity=7)
-
-    assert not state.frame.requires_grad
-    assert not state.logits.requires_grad
-    assert state.identity == 7
 
 
 def test_temporal_branch_rejects_incompatible_shapes() -> None:

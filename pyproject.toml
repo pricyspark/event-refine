@@ -9,6 +9,9 @@ description = "FlowSIS training and inference code"
 readme = "README.md"
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+prompt-generation = ["openai>=1.68"]
+
 [tool.setuptools.packages.find]
 include = ["flowsis*"]
 
@@ -22,6 +25,8 @@ flowsis-train-detector = "flowsis.cli.train.train_detector:main"
 flowsis-train-base = "flowsis.cli.train.train_base:main"
 flowsis-visualize-detector-augmentations = "flowsis.cli.train.visualize_detector_augmentations:main"
 flowsis-visualize-detection-dataset = "flowsis.cli.data.visualize_hf_detection_dataset:main"
+flowsis-author-text-prompts = "flowsis.cli.data.author_text_prompts:main"
+flowsis-generate-text-prompts = "flowsis.cli.data.generate_text_prompts:main"
 flowsis-embed-text-prompts = "flowsis.cli.data.embed_text_prompts:main"
 flowsis-profile-base = "flowsis.cli.eval.profile_base:main"
 flowsis-annotate = "flowsis.cli.data.annotate:main"

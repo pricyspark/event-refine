@@ -2,9 +2,15 @@ import csv
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from flowsis.cli.data.annotate import ReviewLog, image_prompt
-from flowsis.data.annotations import extend_image_manifest
+from flowsis.cli.data.annotate import (
+    Candidate,
+    ReviewLog,
+    _image_object_rows,
+    image_prompt,
+)
+from flowsis.data.annotations import canonical_tool_label, extend_image_manifest
 from flowsis.data.masks import load_mask_bundle, save_mask_bundle
 
 
@@ -54,6 +60,31 @@ def test_image_prompt_defaults_to_coarse_class() -> None:
     )
 
 
+def test_canonical_tool_label_combines_descriptor_and_class_once() -> None:
+    assert canonical_tool_label("iris", "scissors", {}) == "iris scissors"
+    assert canonical_tool_label("mayo scissors", "scissors", {}) == "mayo scissors"
+    assert canonical_tool_label("mallet", "mallet", {}) == "mallet"
+
+
+def test_single_reprompt_candidate_keeps_manifest_identity(tmp_path: Path) -> None:
+    mask = np.ones((4, 5), dtype=np.bool_)
+    rows = _image_object_rows(
+        {
+            "Image ID": "image-1",
+            "Tool ID": "tool-1",
+            "Tool Name": "iris",
+            "Tool Class": "scissors",
+        },
+        [Candidate(mask, 0.9, "shears", "instance-0")],
+        tmp_path / "mask.npz",
+        "shears",
+    )
+
+    assert rows[0]["Tool ID"] == "tool-1"
+    assert rows[0]["Tool Name"] == "iris"
+    assert rows[0]["Tool Class"] == "scissors"
+
+
 def test_multi_instance_bundle_round_trip_and_ignore(tmp_path: Path) -> None:
     masks = np.zeros((2, 9, 11), dtype=np.bool_)
     masks[0, 1:4, 2:8] = True
@@ -70,12 +101,9 @@ def test_multi_instance_bundle_round_trip_and_ignore(tmp_path: Path) -> None:
     assert loaded.identities == ("left", "right")
 
 
-def test_legacy_single_mask_bundle_is_still_readable(tmp_path: Path) -> None:
-    mask = np.eye(7, dtype=np.bool_)
-    path = tmp_path / "legacy.npz"
-    np.savez_compressed(path, packed=np.packbits(mask), shape=mask.shape)
+def test_unversioned_mask_archive_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "unversioned.npz"
+    np.savez_compressed(path, packed=np.array([1], dtype=np.uint8), shape=(1, 1))
 
-    loaded = load_mask_bundle(path)
-
-    np.testing.assert_array_equal(loaded.masks[0], mask)
-    assert loaded.identities == ("0",)
+    with pytest.raises(ValueError, match="Unversioned"):
+        load_mask_bundle(path)

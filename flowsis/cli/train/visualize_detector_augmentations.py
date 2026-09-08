@@ -41,7 +41,9 @@ def parse_args() -> argparse.Namespace:
             "loaded, intermediate, and final stages."
         )
     )
-    parser.add_argument("--dataset-path", type=str, default="data/dataset")
+    parser.add_argument(
+        "--dataset-path", type=str, default="data/new/segmentation-dataset"
+    )
     parser.add_argument("--dataset-name", type=str, default=None)
     parser.add_argument("--dataset-config", type=str, default=None)
     parser.add_argument("--train-split", type=str, default="train")

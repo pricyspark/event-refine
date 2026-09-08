@@ -14,6 +14,8 @@ from PIL import Image
 from flowsis.data.annotations import (
     CAPTURE_SESSION_FIELD,
     IMAGE_ID_FIELD,
+    canonical_tool_label,
+    normalize_tool_name,
     parse_bool,
     read_csv,
     validate_visibility,
@@ -21,9 +23,30 @@ from flowsis.data.annotations import (
 from flowsis.data.masks import load_mask_bundle
 
 
-def canonical_name(value: str, aliases: dict[str, str]) -> str:
-    normalized = " ".join(value.strip().split())
-    return aliases.get(normalized.casefold(), normalized)
+def _image_object_identity(
+    image: dict[str, str],
+    obj: dict[str, str],
+    *,
+    object_count: int,
+    aliases: dict[str, str],
+) -> tuple[str, str, str]:
+    """Fill missing identity metadata for a single intended object."""
+    if (
+        object_count == 1
+        and image.get("Tool Name", "").strip()
+        and not obj.get("Tool ID", "").strip()
+        and not obj.get("Tool Class", "").strip()
+    ):
+        return (
+            normalize_tool_name(image["Tool Name"], aliases),
+            image.get("Tool Class", ""),
+            image.get("Tool ID", ""),
+        )
+    return (
+        normalize_tool_name(obj["Tool Name"], aliases),
+        obj.get("Tool Class", ""),
+        obj.get("Tool ID", ""),
+    )
 
 
 def _has_ignore(path: Path) -> bool:
@@ -129,19 +152,42 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
     reviewed = _reviewed_keys(args.review_log)
     if not reviewed:
         raise ValueError("Review log contains no accepted images.")
+    reviewed_frames = _reviewed_video_frames(args.video_review_log)
     by_image: dict[str, list[dict[str, str]]] = defaultdict(list)
     for obj in objects:
         validate_visibility(obj)
         by_image[obj[IMAGE_ID_FIELD]].append(obj)
+    image_by_id = {image[IMAGE_ID_FIELD]: image for image in images}
     aliases_raw = json.loads(args.aliases_json.read_text()) if args.aliases_json else {}
     aliases = {str(key).casefold(): str(value) for key, value in aliases_raw.items()}
-    names = sorted(
-        {
-            canonical_name(obj["Tool Name"], aliases)
-            for obj in objects + video_objects
-            if parse_bool(obj.get("Class Valid"))
-        }
+    class_names = set()
+    for image_id in reviewed:
+        image = image_by_id.get(image_id)
+        annotated = by_image.get(image_id, [])
+        if image is None:
+            raise KeyError(f"Review log refers to unknown image {image_id!r}.")
+        for obj in annotated:
+            if parse_bool(obj.get("Class Valid")) and parse_bool(
+                obj.get("Base Valid")
+            ):
+                name, tool_class, _ = _image_object_identity(
+                    image,
+                    obj,
+                    object_count=len(annotated),
+                    aliases=aliases,
+                )
+                class_names.add(canonical_tool_label(name, tool_class, aliases))
+    class_names.update(
+        canonical_tool_label(
+            obj.get("Tool Name", ""), obj.get("Tool Class", ""), aliases
+        )
+        for obj in video_objects
+        if (obj.get("Video ID"), int(obj.get("Frame Index", -1)))
+        in reviewed_frames
+        and parse_bool(obj.get("Class Valid"))
+        and parse_bool(obj.get("Base Valid"))
     )
+    names = sorted(class_names)
     if not names:
         raise ValueError("No class-valid object annotations were found.")
     label_by_name = {name: index for index, name in enumerate(names)}
@@ -150,7 +196,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         image_id = image.get(IMAGE_ID_FIELD, "")
         if image_id not in reviewed:
             continue
-        image_path = args.image_manifest.parent / image["Filepath"]
+        image_path = (args.image_manifest.parent / image["Filepath"]).resolve()
         if not image_path.is_file():
             raise FileNotFoundError(f"Missing reviewed image {image_path}.")
         annotated = by_image.get(image_id, [])
@@ -166,7 +212,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
             annotated[0]["Mask Path"]
             if annotated
             else args.image_mask_dir / f"{image_id}.npz"
-        )
+        ).resolve()
         if _has_ignore(bundle_path):
             continue
         with Image.open(image_path) as loaded:
@@ -175,8 +221,14 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         for index, obj in enumerate(annotated):
             if not parse_bool(obj.get("Mask Valid")):
                 continue
-            name = canonical_name(obj["Tool Name"], aliases)
-            if name not in label_by_name:
+            name, tool_class, tool_id = _image_object_identity(
+                image,
+                obj,
+                object_count=len(annotated),
+                aliases=aliases,
+            )
+            label = canonical_tool_label(name, tool_class, aliases)
+            if label not in label_by_name:
                 continue
             row_objects.append(
                 {
@@ -188,11 +240,11 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                         float(obj["BBox Width"]),
                         float(obj["BBox Height"]),
                     ],
-                    "category": label_by_name[name],
+                    "category": label_by_name[label],
                     "tool_name": name,
-                    "tool_class": obj.get("Tool Class", ""),
-                    "physical_tool_id": obj.get("Tool ID", ""),
-                    "mask_path": obj["Mask Path"],
+                    "tool_class": tool_class,
+                    "physical_tool_id": tool_id,
+                    "mask_path": str(Path(obj["Mask Path"]).resolve()),
                     "mask_index": int(obj["Mask Index"]),
                     "annotation_confidence": float(
                         obj.get("Annotation Confidence", 1.0)
@@ -219,7 +271,6 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                 "objects": row_objects,
             }
         )
-    reviewed_frames = _reviewed_video_frames(args.video_review_log)
     videos = (
         {row["Video ID"]: row for row in read_csv(args.video_manifest)}
         if args.video_manifest.is_file()
@@ -249,18 +300,20 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
             annotated[0]["Mask Path"]
             if annotated
             else args.video_mask_dir / video_id / f"{frame_index}.npz"
-        )
+        ).resolve()
         if _has_ignore(bundle_path):
             continue
-        video_path = args.video_manifest.parent / video["Filepath"]
+        video_path = (args.video_manifest.parent / video["Filepath"]).resolve()
         if not video_path.is_file():
             raise FileNotFoundError(f"Missing reviewed video {video_path}.")
         row_objects = []
         for index, obj in enumerate(annotated):
             if not parse_bool(obj.get("Mask Valid")):
                 continue
-            name = canonical_name(obj["Tool Name"], aliases)
-            if name not in label_by_name:
+            name = normalize_tool_name(obj["Tool Name"], aliases)
+            tool_class = obj.get("Tool Class", "")
+            label = canonical_tool_label(name, tool_class, aliases)
+            if label not in label_by_name:
                 continue
             row_objects.append(
                 {
@@ -272,11 +325,11 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                         float(obj["BBox Width"]),
                         float(obj["BBox Height"]),
                     ],
-                    "category": label_by_name[name],
+                    "category": label_by_name[label],
                     "tool_name": name,
-                    "tool_class": obj.get("Tool Class", ""),
+                    "tool_class": tool_class,
                     "physical_tool_id": obj.get("Tool ID", ""),
-                    "mask_path": obj["Mask Path"],
+                    "mask_path": str(Path(obj["Mask Path"]).resolve()),
                     "mask_index": int(obj["Mask Index"]),
                     "annotation_confidence": float(
                         obj.get("Annotation Confidence", 1.0)
@@ -359,6 +412,11 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
     ):
         raise ValueError("Leakage-safe grouping produced an empty requested split.")
     dataset = Dataset.from_list(rows, features=features)
+    split_sizes = {
+        "train": args.train_size,
+        "validation": args.validation_size,
+        "test": args.test_size,
+    }
     result = DatasetDict(
         {
             split: dataset.select(
@@ -368,7 +426,8 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
                     if assigned == split
                 ]
             )
-            for split in ("train", "validation", "test")
+            for split, size in split_sizes.items()
+            if size > 0
         }
     )
     if args.output_path.exists():

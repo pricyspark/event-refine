@@ -15,7 +15,6 @@ from flowsis.set_mask import SetMaskHead
 BASE_CHECKPOINT_FILE = "base.pt"
 BASE_CHECKPOINT_VERSION = 2
 BASE_ARCHITECTURE = "set_mask_base"
-LEGACY_HEAD_FILE = "head.pt"
 
 
 @dataclass(frozen=True)
@@ -63,11 +62,6 @@ def save_base_checkpoint(model: FlowSISBase, directory: str | Path) -> Path:
 def resolve_base_checkpoint(path: str | Path) -> Path:
     input_path = Path(path)
     if input_path.is_file():
-        if input_path.name == LEGACY_HEAD_FILE:
-            raise ValueError(
-                "Legacy BaseFusionHead checkpoints are incompatible with the "
-                "set-based FlowSIS architecture; train a new base checkpoint."
-            )
         return input_path
 
     candidates = [
@@ -94,11 +88,6 @@ def resolve_base_checkpoint(path: str | Path) -> Path:
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    if (input_path / LEGACY_HEAD_FILE).exists():
-        raise ValueError(
-            "Legacy BaseFusionHead checkpoints are incompatible with the set-based "
-            "FlowSIS architecture; train a new base checkpoint."
-        )
     raise FileNotFoundError(
         f"Could not find {BASE_CHECKPOINT_FILE} under {input_path}."
     )

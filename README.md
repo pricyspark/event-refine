@@ -19,37 +19,40 @@ backbone tap is validated against the 5.13 detector layouts.
 
 ## Train
 
-First train or select a detector checkpoint and generate pooled SigLIP2 prompt
-embeddings. Every detector class needs the same number of `[P,768]` prompt
-vectors.
+Build the reviewed Arrow dataset, generate and review its three-prompt SigLIP2
+suite, and then train or select a detector checkpoint. Every detector class
+receives the same number of `[P,768]` prompt vectors.
 
 ```bash
+flowsis-build-annotated-dataset
+flowsis-author-text-prompts
+# Review/edit data/new/text_prompts.json before embedding it.
+flowsis-embed-text-prompts
 flowsis-train-detector --detector dfine
 
 flowsis-train-base \
   --detector-model outputs/detectors/dfine/final \
-  --text-embeddings-dir data/manifests/text-embeddings \
-  --dataset-path data/segmentation-dataset \
-  --images-dir data/frames \
-  --masks-dir data/masks \
+  --text-embeddings-dir data/new/text-embeddings \
+  --dataset-path data/new/segmentation-dataset \
   --train-stages head:5,neck:3,all:2 \
   --output-dir outputs/base
 ```
 
-Datasets can be moved between machines: if a serialized image or mask path no
-longer exists, the loader relocates it below `--images-dir` or `--masks-dir`
-using the stored video/frame metadata. Rebuilding is therefore optional when
-the annotations and local assets are otherwise unchanged.
+Manual prompt authoring is the dependency-free default. An optional API-backed
+draft generator is available with `pip install -e '.[prompt-generation]'` and
+`flowsis-generate-text-prompts`; generated descriptions always require review.
+
+The builder stores absolute external image, video, and mask paths in Arrow.
+Rebuild the lightweight Arrow dataset after moving its source annotations or
+media to another machine.
 
 For a quick end-to-end plumbing test, bound both training and validation work:
 
 ```bash
 flowsis-train-base \
   --detector-model outputs/good/dfine-m-single \
-  --text-embeddings-dir data/manifests/text-embeddings \
-  --dataset-path data/segmentation-dataset \
-  --images-dir data/frames \
-  --masks-dir data/masks \
+  --text-embeddings-dir data/new/text-embeddings \
+  --dataset-path data/new/segmentation-dataset \
   --output-dir outputs/base-smoke \
   --train-stages head:1 \
   --max-train-images 20 \
@@ -93,34 +96,29 @@ the dataset-tuned D-FINE Large checkpoint.
 Checkpoints are self-contained model directories. Hugging Face detector files
 and a versioned `base.pt` live together; `base.pt` contains the set-mask weights,
 prompt bank, ordered labels, thresholds, and architecture metadata. External
-prompt files are only needed when starting a new training run. Legacy `head.pt`
-checkpoints intentionally fail with an incompatibility error.
+prompt files are only needed when starting a new training run.
 
 ## Evaluate and deploy
 
 ```bash
 flowsis-evaluate-base \
   --model-path outputs/base/best \
-  --dataset-path data/segmentation-dataset \
-  --images-dir data/frames \
-  --masks-dir data/masks \
+  --dataset-path data/new/segmentation-dataset \
   --split test
 
 # Same-checkpoint reliance tests; retraining is still required for causal claims
 flowsis-ablate-base \
   --model-path outputs/base/best \
-  --dataset-path data/segmentation-dataset \
-  --images-dir data/frames \
-  --masks-dir data/masks \
+  --dataset-path data/new/segmentation-dataset \
   --split test
 
 flowsis-live-base \
   --model-path outputs/base/best \
-  --video-source data/raw/1.mp4
+  --video-source data/new/videos/20260901_191034.mp4
 
 flowsis-profile-base \
   --model-path outputs/base/best \
-  --video-source data/raw/1.mp4
+  --video-source data/new/videos/20260901_191034.mp4
 ```
 
 Evaluation reports class-aware matched and oracle-query mask quality, union
@@ -128,10 +126,9 @@ metrics, boundary F1, box/mask AP50, precision/recall, empty-frame false
 positives, and per-class metrics. Validation uses deterministic geometry;
 overlap compositing remains training-only.
 
-The segmentation dataset builder groups repeated annotations by image. For new
-data, use `--group-splits-by-video` (or supply official pre-made splits) to avoid
-source leakage. `--include-missing-masks-as-empty` is intentionally opt-in and
-must only be used when missing masks are authoritative negatives.
+The dataset builder keeps connected physical-tool and capture-session groups
+in one split, preventing rotation, setup, and background leakage. Only reviewed,
+exhaustively annotated images contribute background supervision.
 
 The temporal refiner is a separate, identity-initialized residual branch. The
 base detector and set-mask head still run completely on every frame; the

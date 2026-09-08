@@ -312,8 +312,6 @@ def _still_replay_loader(
     if _label_names(split) != base.label_names:
         raise ValueError("Still replay and base model class orders differ.")
     replay_args = SimpleNamespace(
-        images_dir=args.still_images_dir,
-        masks_dir=args.still_masks_dir,
         image_size=args.image_size,
         use_overlap_augment=False,
         overlap_min_overlays=0,
@@ -367,8 +365,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--finetune-mask-head", action="store_true")
     parser.add_argument("--base-head-lr-scale", type=float, default=0.1)
     parser.add_argument("--still-dataset-path", type=Path)
-    parser.add_argument("--still-images-dir", type=Path, default=Path("data/frames"))
-    parser.add_argument("--still-masks-dir", type=Path, default=Path("data/masks"))
     parser.add_argument("--still-replay-weight", type=float, default=1.0)
     parser.add_argument("--device")
     parser.add_argument("--amp", action="store_true")

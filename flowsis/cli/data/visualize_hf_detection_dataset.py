@@ -8,7 +8,7 @@ from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
-DEFAULT_DATASET_PATH = Path("data/dataset")
+DEFAULT_DATASET_PATH = Path("data/new/segmentation-dataset")
 DEFAULT_OUTPUT_DIR = Path("outputs/dataset_visualization")
 
 
@@ -173,9 +173,14 @@ def main() -> None:
         rendered = draw_example(example, id2label=id2label)
         rendered_images.append(rendered)
 
+        image_id = str(example["image_id"])
+        safe_image_id = "".join(
+            character if character.isalnum() or character in "-_" else "_"
+            for character in image_id
+        )
         output_path = (
             args.output_dir
-            / f"{args.split}_{dataset_index:05d}_image_{int(example['image_id']):06d}.jpg"
+            / f"{args.split}_{dataset_index:05d}_image_{safe_image_id}.jpg"
         )
         rendered.save(output_path, quality=95)
 

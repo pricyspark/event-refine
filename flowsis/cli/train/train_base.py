@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import math
 import time
 from collections.abc import Sequence
@@ -34,7 +33,7 @@ from flowsis.data import (
     CallablePipeline,
     PreparedDataset,
     load_object_image,
-    relocate_segmentation_paths,
+    load_object_masks,
 )
 from flowsis.data.augment import (
     center_square_augment,
@@ -44,8 +43,11 @@ from flowsis.data.augment import (
     rotation_augment,
 )
 from flowsis.data.images import get_image
-from flowsis.data.masks import load_mask_bundle
-from flowsis.data.object_records import get_object_feature_schema, get_object_records
+from flowsis.data.object_records import (
+    get_object_feature_schema,
+    get_object_records,
+    numeric_image_id,
+)
 from flowsis.data.prompts import load_prompt_bank
 from flowsis.matching import match_object_queries, segmentation_objective
 from flowsis.pretrained import BaseDetector, load_detector
@@ -68,9 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train the end-to-end set-based FlowSIS segmentation model."
     )
-    parser.add_argument("--dataset-path", default="data/segmentation-dataset")
-    parser.add_argument("--images-dir", type=Path, default=Path("data/frames"))
-    parser.add_argument("--masks-dir", type=Path, default=Path("data/masks"))
+    parser.add_argument("--dataset-path", default="data/new/segmentation-dataset")
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--validation-split", default="validation")
     parser.add_argument(
@@ -194,42 +194,10 @@ def expand_stages(
     ]
 
 
-def load_segmentation_objects(example: dict[str, Any], **_: Any) -> dict[str, Any]:
-    bundles = {}
-    for obj in example.get("objects", []):
-        if "mask" not in obj:
-            path = obj["mask_path"]
-            if path not in bundles:
-                bundles[path] = load_mask_bundle(path)
-            bundle = bundles[path]
-            mask_index = int(obj.get("mask_index", 0))
-            if mask_index < 0 or mask_index >= len(bundle.masks):
-                raise IndexError(
-                    f"mask_index {mask_index} is outside bundle {path} with "
-                    f"{len(bundle.masks)} masks."
-                )
-            obj["mask"] = bundle.masks[mask_index]
-    return example
-
-
 def build_dataset(
     split: Dataset, args: argparse.Namespace, *, training: bool
 ) -> Dataset:
-    loader = CallablePipeline(
-        (
-            relocate_segmentation_paths,
-            load_object_image,
-            load_segmentation_objects,
-        ),
-        (
-            {
-                "images_dir": getattr(args, "images_dir", Path("data/frames")),
-                "masks_dir": getattr(args, "masks_dir", Path("data/masks")),
-            },
-            {},
-            {},
-        ),
-    )
+    loader = CallablePipeline((load_object_image, load_object_masks))
     if not training:
         return cast(
             Dataset,
@@ -287,16 +255,6 @@ def _normalized_box(obj: dict[str, Any], example: dict[str, Any]) -> list[float]
     ]
 
 
-def _numeric_image_id(value: object, fallback: int) -> int:
-    if value is None or value == "":
-        return fallback
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        digest = hashlib.sha256(str(value).encode()).digest()[:8]
-        return int.from_bytes(digest, "big") & ((1 << 63) - 1)
-
-
 def collate_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[str, Any]:
     image_tensors = [
         image_to_rgb_tensor(get_image(example, convert_mode="RGB")) for example in batch
@@ -324,7 +282,7 @@ def collate_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[st
         "images": images,
         "annotations": [
             {
-                "image_id": _numeric_image_id(example.get("image_id"), index),
+                "image_id": numeric_image_id(example.get("image_id"), index),
                 "annotations": [
                     {
                         "bbox": [float(value) for value in obj["bbox"]],
@@ -729,8 +687,6 @@ def main() -> None:
             "train_images": len(train_split),
             "validation_split": args.validation_split,
             "validation_images": len(validation_split),
-            "images_dir": args.images_dir,
-            "masks_dir": args.masks_dir,
         },
     )
     prompt_bank = load_prompt_bank(label_names, args.text_embeddings_dir)

@@ -19,6 +19,7 @@ from flowsis.data.annotations import (
     IMAGE_OBJECT_FIELDS,
     VIDEO_MANIFEST_FIELDS,
     VIDEO_OBJECT_FIELDS,
+    canonical_tool_label,
     extend_image_manifest,
     load_taxonomy_aliases,
     normalize_tool_name,
@@ -138,14 +139,7 @@ def image_prompt(row: Mapping[str, str], style: str, aliases: Mapping[str, str])
     if style == "tool-class":
         prompt = tool_class or tool_name
     elif style == "name-and-class":
-        if not tool_name:
-            prompt = tool_class
-        elif not tool_class or tool_name.casefold() == tool_class.casefold():
-            prompt = tool_name
-        elif tool_name.casefold().endswith(f" {tool_class.casefold()}"):
-            prompt = tool_name
-        else:
-            prompt = f"{tool_name} {tool_class}"
+        prompt = canonical_tool_label(tool_name, tool_class, aliases)
     else:
         raise ValueError(f"Unknown image prompt style {style!r}.")
     if not prompt:
@@ -369,7 +363,11 @@ def _image_object_rows(
         if candidate.prompt.casefold() == intended_prompt.casefold()
         and candidate.identity.startswith("instance-")
     ]
-    intended_index = intended_indices[0] if intended_indices else None
+    intended_index = (
+        0
+        if len(candidates) == 1
+        else (intended_indices[0] if intended_indices else None)
+    )
     for index, candidate in enumerate(candidates):
         box = mask2xywh(candidate.mask)
         if box is None:
@@ -451,6 +449,7 @@ def annotate_images(args: argparse.Namespace) -> None:
                 )
         for row, image, initial in zip(pending, images, predicted, strict=True):
             key = row[IMAGE_ID_FIELD]
+            active_prompt = prompts[pending.index(row)]
             candidates = deduplicate_candidates(initial)
             while True:
                 decision, selected, ignored, replacement_prompt, visibility = (
@@ -466,13 +465,14 @@ def annotate_images(args: argparse.Namespace) -> None:
                     break
                 assert replacement_prompt is not None
                 replacement_prompt = normalize_tool_name(replacement_prompt, aliases)
+                active_prompt = replacement_prompt
                 candidates = deduplicate_candidates(
                     backend.predict([image], [replacement_prompt])[0]
                 )
             if decision == "quit":
                 return
             if decision == "skipped":
-                review.append(key, decision, prompt=prompts[pending.index(row)])
+                review.append(key, decision, prompt=active_prompt)
                 continue
             if decision == "accepted":
                 mask_path = args.mask_dir / f"{key}.npz"
@@ -500,7 +500,7 @@ def annotate_images(args: argparse.Namespace) -> None:
                     normalized_row,
                     selected,
                     mask_path,
-                    prompts[pending.index(row)],
+                    active_prompt,
                 )
                 object_rows = _replace_scope(
                     object_rows,
@@ -508,7 +508,7 @@ def annotate_images(args: argparse.Namespace) -> None:
                     scope={IMAGE_ID_FIELD: key},
                 )
                 write_csv(args.object_manifest, object_rows, IMAGE_OBJECT_FIELDS)
-            review.append(key, decision, prompt=prompts[pending.index(row)])
+            review.append(key, decision, prompt=active_prompt)
 
 
 def populate_video_manifest(args: argparse.Namespace) -> Path:

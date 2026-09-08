@@ -22,33 +22,6 @@ class TemporalOutput:
     visibility_logits: torch.Tensor | None = None
 
 
-@dataclass(frozen=True)
-class TemporalState:
-    """Detached recurrent state retained between inference frames."""
-
-    frame: torch.Tensor
-    logits: torch.Tensor
-    identity: int | str | None = None
-    hidden_state: torch.Tensor | None = None
-
-    @classmethod
-    def from_output(
-        cls,
-        frame: torch.Tensor,
-        output: TemporalOutput,
-        *,
-        identity: int | str | None = None,
-    ) -> TemporalState:
-        return cls(
-            frame=frame.detach(),
-            logits=output.final_logits.detach(),
-            identity=identity,
-            hidden_state=(
-                None if output.hidden_state is None else output.hidden_state.detach()
-            ),
-        )
-
-
 def warp_backward(
     values: torch.Tensor,
     backward_flow: torch.Tensor,
@@ -502,7 +475,6 @@ class TemporalRefinementBranch(nn.Module):
 __all__ = [
     "TemporalOutput",
     "TemporalRefinementBranch",
-    "TemporalState",
     "warp_backward",
     "resize_flow",
 ]

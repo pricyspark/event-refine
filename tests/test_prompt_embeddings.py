@@ -1,9 +1,19 @@
+import json
 from pathlib import Path
 
 import pytest
 import torch
 
-from flowsis.data.prompts import LabelPrompts, load_prompt_bank
+from flowsis.cli.data.author_text_prompts import existing_descriptions, prompt_draft
+from flowsis.cli.data.embed_text_prompts import select_prompt_types
+from flowsis.cli.data.generate_text_prompts import generate_descriptions
+from flowsis.data.prompts import (
+    LabelPrompts,
+    build_prompt_suite,
+    load_prompt_bank,
+    siglip2_pipeline_prompt,
+    validate_prompt_suite,
+)
 
 
 def test_load_embeddings_moves_cached_tensor_to_requested_device(
@@ -42,3 +52,119 @@ def test_prompt_bank_preserves_label_order_and_requires_rectangular_shape(
     torch.save(torch.ones(1, 768), tmp_path / "second.pt")
     with pytest.raises(ValueError, match="same prompt count"):
         load_prompt_bank(("first", "second"), tmp_path)
+
+
+def test_prompt_suite_uses_full_label_exact_template_and_description() -> None:
+    taxonomy = {"iris scissors": "scissors", "mallet": "mallet"}
+    descriptions = {
+        "iris scissors": "iris scissors with short fine blades and ring handles",
+        "mallet": "mallet with a broad cylindrical striking head",
+    }
+    suites = build_prompt_suite(taxonomy, descriptions)
+
+    assert suites["iris scissors"] == [
+        "iris scissors",
+        "This is a photo of iris scissors.",
+        "iris scissors with short fine blades and ring handles",
+    ]
+    assert len(suites["mallet"]) == len(suites["iris scissors"]) == 3
+    assert siglip2_pipeline_prompt("mayo scissors") == (
+        "This is a photo of mayo scissors."
+    )
+
+
+def test_custom_prompt_suite_must_match_taxonomy_and_be_rectangular() -> None:
+    taxonomy = {"iris scissors": "scissors", "mallet": "mallet"}
+    with pytest.raises(ValueError, match="missing"):
+        validate_prompt_suite(
+            {
+                "iris scissors": [
+                    "iris scissors",
+                    "This is a photo of iris scissors.",
+                    "iris scissors with short fine blades",
+                ]
+            },
+            taxonomy,
+        )
+    with pytest.raises(ValueError, match="exactly three"):
+        validate_prompt_suite(
+            {
+                "iris scissors": [
+                    "iris scissors",
+                    "This is a photo of iris scissors.",
+                    "iris scissors with short fine blades",
+                ],
+                "mallet": ["mallet", "This is a photo of mallet."],
+            },
+            taxonomy,
+        )
+
+
+def test_manual_prompt_draft_is_resumable(tmp_path: Path) -> None:
+    taxonomy = {"iris scissors": "scissors"}
+    draft = prompt_draft(taxonomy, {})
+    assert draft == {
+        "iris scissors": [
+            "iris scissors",
+            "This is a photo of iris scissors.",
+            "",
+        ]
+    }
+
+    path = tmp_path / "prompts.json"
+    draft["iris scissors"][2] = "iris scissors with short fine blades"
+    path.write_text(json.dumps(draft), encoding="utf-8")
+
+    assert existing_descriptions(path, taxonomy) == {
+        "iris scissors": "iris scissors with short fine blades"
+    }
+
+
+def test_prompt_type_selection_supports_clean_ablations() -> None:
+    suites = {
+        "iris scissors": [
+            "iris scissors",
+            "This is a photo of iris scissors.",
+            "iris scissors with short fine blades",
+        ]
+    }
+
+    assert select_prompt_types(suites, ["description"]) == {
+        "iris scissors": ["iris scissors with short fine blades"]
+    }
+    assert select_prompt_types(suites, ["description", "label"]) == {
+        "iris scissors": [
+            "iris scissors",
+            "iris scissors with short fine blades",
+        ]
+    }
+
+
+def test_optional_generator_records_reproducibility_metadata() -> None:
+    class Response:
+        id = "response-test"
+        model = "test-model-snapshot"
+        output_text = """{
+          "instruments": [
+            {
+              "label": "iris scissors",
+              "description": "iris scissors with short fine blades"
+            }
+          ]
+        }"""
+
+    class Responses:
+        def create(self, **kwargs: object) -> Response:
+            assert kwargs["store"] is False
+            return Response()
+
+    descriptions, provenance = generate_descriptions(
+        {"iris scissors": "scissors"}, Responses(), model="requested-model"
+    )
+
+    assert descriptions == {
+        "iris scissors": "iris scissors with short fine blades"
+    }
+    assert provenance["requested_model"] == "requested-model"
+    assert provenance["response_model"] == "test-model-snapshot"
+    assert provenance["review_required"] is True

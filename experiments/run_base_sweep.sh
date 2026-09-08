@@ -18,10 +18,8 @@ if [[ -z "${suite}" ]]; then
 fi
 shift
 
-text_embeddings_dir=${TEXT_EMBEDDINGS_DIR:-data/manifests/text-embeddings}
-dataset_path=${DATASET_PATH:-data/segmentation-dataset}
-images_dir=${IMAGES_DIR:-data/frames}
-masks_dir=${MASKS_DIR:-data/masks}
+text_embeddings_dir=${TEXT_EMBEDDINGS_DIR:-data/new/text-embeddings}
+dataset_path=${DATASET_PATH:-data/new/segmentation-dataset}
 output_root=${OUTPUT_ROOT:-outputs/experiments/base}
 primary_model=${PRIMARY_MODEL:-outputs/good/dfine-l-single}
 dfine_model=${DFINE_MODEL:-outputs/good/dfine-l-single}
@@ -35,8 +33,6 @@ rtdetrv2_official_control=${RTDETRV2_OFFICIAL_CONTROL_MODEL:-}
 common=(
   --text-embeddings-dir "${text_embeddings_dir}"
   --dataset-path "${dataset_path}"
-  --images-dir "${images_dir}"
-  --masks-dir "${masks_dir}"
   --device cuda
   --image-size 640
   --warmup-ratio 0.05

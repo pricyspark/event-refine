@@ -8,7 +8,6 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-DEFAULT_MASKS_DIR = Path("data/masks")
 MASK_BUNDLE_VERSION = 2
 MASK_BITORDER = "big"
 
@@ -88,11 +87,10 @@ def save_mask_bundle(
 
 
 def load_mask_bundle(path: str | Path) -> MaskBundle:
-    """Load v2 bundles and adapt the legacy packed single-mask format."""
+    """Load a versioned, bit-packed multi-instance mask bundle."""
     with np.load(path, allow_pickle=False) as data:
         if "format_version" not in data:
-            mask = _unpack_legacy(data)
-            return MaskBundle(mask[None], ("0",))
+            raise ValueError(f"Unversioned mask archive at {path} is unsupported.")
 
         version = int(data["format_version"])
         if version != MASK_BUNDLE_VERSION:
@@ -128,34 +126,6 @@ def load_mask_bundle(path: str | Path) -> MaskBundle:
                 .astype(np.bool_, copy=False)
             )
     return MaskBundle(masks, identities, ignore)
-
-
-def _unpack_legacy(data: np.lib.npyio.NpzFile) -> NDArray[np.bool_]:
-    if "packed" not in data or "shape" not in data:
-        raise ValueError("Unrecognized mask archive format.")
-    shape = tuple(int(value) for value in data["shape"])
-    n_bits = int(np.prod(shape))
-    return np.unpackbits(data["packed"])[:n_bits].reshape(shape).astype(np.bool_)
-
-
-def load_binary(
-    path,
-) -> NDArray[np.bool_]:  # TODO: this should go in a general utils file
-    bundle = load_mask_bundle(path)
-    if bundle.masks.shape[0] != 1:
-        raise ValueError(
-            "load_binary requires exactly one mask; use load_mask_bundle for "
-            f"{bundle.masks.shape[0]} instances."
-        )
-    return bundle.masks[0]
-
-
-def load_mask(video_id: int, frame_idx: int, path=None) -> NDArray[np.bool_]:
-    if path is None:
-        path = DEFAULT_MASKS_DIR
-    mask_path = path / f"{video_id}" / f"{frame_idx}.npz"
-    mask = load_binary(mask_path)
-    return mask
 
 
 def mask2xywh(mask: NDArray) -> list[int] | None:

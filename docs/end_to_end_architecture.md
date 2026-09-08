@@ -78,8 +78,8 @@ maximum-logit union. An empty accepted set has `union_logits=None`.
 A model directory contains the detector configuration/processor/weights and
 `base.pt`. The latter embeds set-mask configuration and weights, prompts, label
 order, thresholds, and format metadata. Resume checkpoints add optimizer,
-scheduler, scaler, epoch, and step state. No partial legacy-head conversion is
-attempted.
+scheduler, scaler, epoch, and step state. Artifacts must use the current
+checkpoint format.
 
 ## Metrics and experiments
 

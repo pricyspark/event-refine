@@ -113,7 +113,7 @@ def test_empty_inference_has_no_union() -> None:
     assert prediction.union_logits is None
 
 
-def test_checkpoint_embeds_prompts_and_rejects_legacy(tmp_path: Path) -> None:
+def test_checkpoint_embeds_prompts(tmp_path: Path) -> None:
     model = build_model()
     path = save_base_checkpoint(model, tmp_path)
     checkpoint, resolved = load_base_checkpoint(path)
@@ -124,11 +124,6 @@ def test_checkpoint_embeds_prompts_and_rejects_legacy(tmp_path: Path) -> None:
     torch.testing.assert_close(
         checkpoint.prompt_embeddings, model.head.prompt_embeddings.cpu()
     )
-    legacy = tmp_path / "legacy"
-    legacy.mkdir()
-    (legacy / "head.pt").write_bytes(b"legacy")
-    with pytest.raises(ValueError, match="Legacy BaseFusionHead"):
-        load_base_checkpoint(legacy)
 
 
 @pytest.mark.parametrize(

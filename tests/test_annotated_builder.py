@@ -8,6 +8,7 @@ from PIL import Image
 
 from flowsis.cli.data.build_annotated_dataset import build_dataset
 from flowsis.data.masks import save_mask_bundle
+from flowsis.data.object_records import get_object_feature_schema
 
 
 def _write_csv(path: Path, fields: list[str], rows: list[dict[str, object]]) -> None:
@@ -126,5 +127,8 @@ def test_image_builder_preserves_hierarchy_and_external_mask_indices(
 
     rows = [row for split in dataset.values() for row in split]
     assert len(rows) == 3
+    object_schema = get_object_feature_schema(dataset["train"].features["objects"])
+    assert object_schema["category"].names == ["forceps grasper"]
+    assert rows[0]["objects"][0]["tool_name"] == "forceps"
     assert rows[0]["objects"][0]["tool_class"] == "grasper"
     assert rows[0]["objects"][0]["mask_index"] == 0

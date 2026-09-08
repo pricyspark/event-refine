@@ -115,7 +115,11 @@ def overlap_augment(
     height = example["height"]
     width = example["width"]
 
-    base_masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
+    base_masks = (
+        np.stack([obj["mask"] for obj in objects]).astype(np.bool_, copy=False)
+        if objects
+        else np.zeros((0, height, width), dtype=np.bool_)
+    )
 
     min_overlay = kwargs.get("min_overlays", 0)
     max_overlay = kwargs.get("max_overlays", min_overlay)
@@ -148,8 +152,12 @@ def overlap_augment(
 
         overlay_img = overlay_example["image"]
         overlay_objects = overlay_example["objects"]
-        overlay_masks = np.array(
-            [obj["mask"] for obj in overlay_objects], dtype=np.bool_
+        overlay_masks = (
+            np.stack([obj["mask"] for obj in overlay_objects]).astype(
+                np.bool_, copy=False
+            )
+            if overlay_objects
+            else np.zeros((0, height, width), dtype=np.bool_)
         )
         if overlay_img.width != width or overlay_img.height != height:
             raise ValueError(

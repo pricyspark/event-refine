@@ -12,6 +12,8 @@ from datasets import ClassLabel, Dataset, DatasetDict, Features, Sequence, Value
 
 from flowsis.data.annotations import (
     CAPTURE_SESSION_FIELD,
+    canonical_tool_label,
+    normalize_tool_name,
     parse_bool,
     read_csv,
     validate_visibility,
@@ -34,11 +36,6 @@ def _accepted_frames(path: Path) -> set[tuple[str, int]]:
     return accepted
 
 
-def _canonical(value: str, aliases: dict[str, str]) -> str:
-    normalized = " ".join(value.strip().split())
-    return aliases.get(normalized.casefold(), normalized)
-
-
 def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str]]:
     videos = {row["Video ID"]: row for row in read_csv(args.video_manifest)}
     objects = read_csv(args.object_manifest) if args.object_manifest.is_file() else []
@@ -49,9 +46,12 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
     aliases = {str(key).casefold(): str(value) for key, value in aliases_raw.items()}
     names = sorted(
         {
-            _canonical(obj["Tool Name"], aliases)
+            canonical_tool_label(
+                obj.get("Tool Name", ""), obj.get("Tool Class", ""), aliases
+            )
             for obj in objects
             if obj.get("Tool Name")
+            and (obj["Video ID"], int(obj["Frame Index"])) in accepted
         }
     )
     if not names:
@@ -67,21 +67,26 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
             obj.get("Annotation Complete")
         ):
             raise ValueError(f"Accepted frame {key} contains an incomplete object row.")
-        name = _canonical(obj["Tool Name"], aliases)
+        name = normalize_tool_name(obj.get("Tool Name", ""), aliases)
+        label = canonical_tool_label(name, obj.get("Tool Class", ""), aliases)
         grouped[key].append(
             {
                 "track_id": obj["Track ID"],
                 "physical_tool_id": obj.get("Tool ID", ""),
                 "tool_class": obj.get("Tool Class", ""),
                 "tool_name": name,
-                "category": category[name],
+                "category": category[label],
                 "bbox": [
                     float(obj["BBox X"]),
                     float(obj["BBox Y"]),
                     float(obj["BBox Width"]),
                     float(obj["BBox Height"]),
                 ],
-                "mask_path": obj.get("Mask Path", ""),
+                "mask_path": (
+                    str(Path(obj["Mask Path"]).resolve())
+                    if obj.get("Mask Path")
+                    else ""
+                ),
                 "mask_index": int(obj.get("Mask Index", -1)),
                 "visibility": obj["Visibility"],
                 "mask_valid": parse_bool(obj.get("Mask Valid")),
@@ -98,7 +103,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         if video_id not in videos:
             raise KeyError(f"Reviewed frame refers to unknown video {video_id!r}.")
         video = videos[video_id]
-        path = args.video_manifest.parent / video["Filepath"]
+        path = (args.video_manifest.parent / video["Filepath"]).resolve()
         if not path.is_file():
             raise FileNotFoundError(f"Missing reviewed video: {path}")
         rows.append(
@@ -112,14 +117,16 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                 "capture_session_id": video.get(CAPTURE_SESSION_FIELD, ""),
                 "annotation_complete": True,
                 "mask_bundle_path": str(
-                    next(
-                        (
-                            obj["mask_path"]
-                            for obj in grouped.get((video_id, frame_index), [])
-                            if obj["mask_path"]
-                        ),
-                        args.mask_dir / video_id / f"{frame_index}.npz",
-                    )
+                    Path(
+                        next(
+                            (
+                                obj["mask_path"]
+                                for obj in grouped.get((video_id, frame_index), [])
+                                if obj["mask_path"]
+                            ),
+                            args.mask_dir / video_id / f"{frame_index}.npz",
+                        )
+                    ).resolve()
                 ),
                 "objects": grouped.get((video_id, frame_index), []),
             }
@@ -242,6 +249,11 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
     ):
         raise ValueError("Leakage-safe grouping produced an empty requested split.")
     dataset = Dataset.from_list(rows, features=features)
+    split_sizes = {
+        "train": args.train_size,
+        "validation": args.validation_size,
+        "test": args.test_size,
+    }
     result = DatasetDict(
         {
             split: dataset.select(
@@ -251,7 +263,8 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
                     if assignments[row["video_id"]] == split
                 ]
             )
-            for split in ("train", "validation", "test")
+            for split, size in split_sizes.items()
+            if size > 0
         }
     )
     if args.output_path.exists():

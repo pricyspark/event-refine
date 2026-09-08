@@ -102,6 +102,23 @@ def normalize_tool_name(value: str, aliases: Mapping[str, str]) -> str:
     return aliases.get(normalized.casefold(), normalized)
 
 
+def canonical_tool_label(
+    tool_name: str,
+    tool_class: str,
+    aliases: Mapping[str, str],
+) -> str:
+    """Combine a descriptive tool name and its class into one model label."""
+    name = normalize_tool_name(tool_name, aliases)
+    coarse = " ".join(tool_class.strip().split())
+    if not name:
+        return coarse
+    if not coarse or name.casefold() == coarse.casefold():
+        return name
+    if name.casefold().endswith(f" {coarse.casefold()}"):
+        return name
+    return f"{name} {coarse}"
+
+
 def _parse_timestamp(value: str) -> datetime | None:
     if not value:
         return None
