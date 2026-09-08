@@ -2,7 +2,7 @@ from pathlib import Path
 from PIL import Image
 from typing import Any
 
-from ..data.masks import load_mask
+from ..data.masks import load_mask, load_mask_bundle
 from ..data.object_records import get_object_records
 
 
@@ -24,6 +24,8 @@ def relocate_segmentation_paths(
         image_video_id = None
 
     stored_image_path = Path(example["image_path"])
+    if example.get("video_path") and int(example.get("frame_index", -1)) >= 0:
+        return example
     if not stored_image_path.is_file():
         if image_video_id is None:
             raise FileNotFoundError(
@@ -64,8 +66,25 @@ def load_object_image(example: dict[str, Any], **kwargs) -> dict:
     if example["modified"]:
         raise ValueError("Cannot load an image for a previously modified sample.")
 
-    image_path = example["image_path"]
-    example["image"] = Image.open(image_path)
+    if example.get("video_path") and int(example.get("frame_index", -1)) >= 0:
+        import cv2
+
+        capture = cv2.VideoCapture(str(example["video_path"]))
+        if not capture.isOpened():
+            raise FileNotFoundError(f"Could not open video {example['video_path']}.")
+        try:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(example["frame_index"]))
+            ok, bgr = capture.read()
+        finally:
+            capture.release()
+        if not ok:
+            raise RuntimeError(
+                f"Could not decode frame {example['frame_index']} from "
+                f"{example['video_path']}."
+            )
+        example["image"] = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    else:
+        example["image"] = Image.open(example["image_path"])
 
     return example
 
@@ -76,6 +95,7 @@ def load_object_masks(example: dict[str, Any], **kwargs) -> dict:
     else:
         mask_dir = None
 
+    bundles = {}
     for obj in example["objects"]:
         if "mask" in obj:
             continue
@@ -83,9 +103,15 @@ def load_object_masks(example: dict[str, Any], **kwargs) -> dict:
         if obj["modified"]:
             raise ValueError("Cannot load a mask for a previously modified object.")
 
-        video_id = obj["video_id"]
-        frame_idx = obj["frame_idx"]
-
-        obj["mask"] = load_mask(video_id, frame_idx, mask_dir)
+        if "mask_path" in obj:
+            bundle_path = obj["mask_path"]
+            if bundle_path not in bundles:
+                bundles[bundle_path] = load_mask_bundle(bundle_path)
+            bundle = bundles[bundle_path]
+            obj["mask"] = bundle.masks[int(obj.get("mask_index", 0))]
+        else:
+            video_id = obj["video_id"]
+            frame_idx = obj["frame_idx"]
+            obj["mask"] = load_mask(video_id, frame_idx, mask_dir)
 
     return example

@@ -67,6 +67,22 @@ def test_object_then_image_loss_reduction_balances_crowding() -> None:
     torch.testing.assert_close(result["loss"], expected)
 
 
+def test_segmentation_loss_ignores_marked_pixels() -> None:
+    logits = torch.tensor([[[20.0, -20.0]]], requires_grad=True)
+    targets = torch.zeros_like(logits)
+    result = segmentation_objective(
+        logits,
+        targets,
+        torch.tensor([0]),
+        batch_size=1,
+        valid_pixels=torch.tensor([[[False, True]]]),
+        bce_weight=1.0,
+        dice_weight=0.0,
+    )
+
+    assert float(result["loss"].detach()) < 1e-6
+
+
 def test_serialized_paths_relocate_between_machines(tmp_path: Path) -> None:
     images_dir = tmp_path / "frames"
     masks_dir = tmp_path / "masks"
@@ -94,11 +110,14 @@ def test_serialized_paths_relocate_between_machines(tmp_path: Path) -> None:
 
 
 def test_warmup_ratio_scales_with_experiment_length() -> None:
-    assert resolve_warmup_steps(
-        warmup_steps=0,
-        warmup_ratio=0.05,
-        total_steps=101,
-    ) == 5
+    assert (
+        resolve_warmup_steps(
+            warmup_steps=0,
+            warmup_ratio=0.05,
+            total_steps=101,
+        )
+        == 5
+    )
 
 
 def test_warmup_ratio_and_steps_are_mutually_exclusive() -> None:

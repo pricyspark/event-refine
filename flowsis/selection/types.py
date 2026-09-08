@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
+
 Box = tuple[float, float, float, float]
 
 
@@ -15,6 +17,7 @@ class SelectionResult:
     track_length: int
     matched_frames: int
     score_breakdown: dict[str, float]
+    track_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,10 @@ class TrackDetection:
     score: float
     label: int
     index: int | None = None
+    mask: np.ndarray | None = None
+    class_distribution: np.ndarray | None = None
+    query_embedding: np.ndarray | None = None
+    frame_size: tuple[int, int] | None = None
 
 
 @dataclass
@@ -39,6 +46,13 @@ class TrackState:
     score_ema: float = 0.0
     last_detection_index: int | None = None
     history: list[TrackDetection] = field(default_factory=list)
+    mask: np.ndarray | None = None
+    warped_mask: np.ndarray | None = None
+    class_distribution: np.ndarray | None = None
+    query_embedding: np.ndarray | None = None
+    mask_stability_ema: float = 0.0
+    class_stability_ema: float = 0.0
+    frame_size: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -55,3 +69,10 @@ class Track:
     last_detection_index: int | None
     score_ema: float
     history: tuple[TrackDetection, ...]
+    mask: np.ndarray | None = None
+    class_distribution: np.ndarray | None = None
+    query_embedding: np.ndarray | None = None
+    mask_stability: float = 0.0
+    class_stability: float = 0.0
+    hit_rate: float = 0.0
+    frame_size: tuple[int, int] | None = None

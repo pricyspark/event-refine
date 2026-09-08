@@ -133,10 +133,15 @@ data, use `--group-splits-by-video` (or supply official pre-made splits) to avoi
 source leakage. `--include-missing-masks-as-empty` is intentionally opt-in and
 must only be used when missing masks are authoritative negatives.
 
-The generic temporal and optical-flow modules remain available, but the old
-selection-coupled recurrent pipeline has been removed. Per-instance temporal
-association and recurrent state are deferred until the set-based baseline is
-established.
+The temporal refiner is a separate, identity-initialized residual branch. The
+base detector and set-mask head still run completely on every frame; the
+refiner recurrently combines each current instance observation with flow-warped
+previous refined logits, hidden state, and shared stride-4 features. Runtime
+track selection remains a separate 30-frame policy and does not backpropagate
+into segmentation.
+
+The reviewed image/video annotation and training workflow is documented in
+[docs/annotation_and_temporal_training.md](docs/annotation_and_temporal_training.md).
 
 See [docs/end_to_end_architecture.md](docs/end_to_end_architecture.md) for tensor
 shapes, loss flow, checkpoint semantics, and the enhancement roadmap.

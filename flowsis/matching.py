@@ -109,6 +109,8 @@ def segmentation_objective(
     object_image_indices: torch.Tensor,
     *,
     batch_size: int,
+    object_weights: torch.Tensor | None = None,
+    valid_pixels: torch.Tensor | None = None,
     bce_weight: float = 1.0,
     dice_weight: float = 1.0,
     dice_smooth: float = 1.0,
@@ -123,22 +125,41 @@ def segmentation_objective(
     if mask_logits.shape[0] == 0:
         zero = mask_logits.sum() * 0.0
         return {"loss": zero, "bce": zero.detach(), "dice_loss": zero.detach()}
+    if object_weights is None:
+        object_weights = mask_logits.new_ones(mask_logits.shape[0])
+    if object_weights.shape != (mask_logits.shape[0],):
+        raise ValueError("object_weights must have one value per mask.")
+    if bool((object_weights < 0).any()):
+        raise ValueError("object_weights must be non-negative.")
+    if valid_pixels is None:
+        valid_pixels = torch.ones_like(target_masks)
+    if valid_pixels.shape != target_masks.shape:
+        raise ValueError("valid_pixels must have the same shape as target masks.")
+    valid_pixels = valid_pixels.to(mask_logits.dtype)
 
     reduce_dims = tuple(range(1, mask_logits.ndim))
-    bce_values = F.binary_cross_entropy_with_logits(
-        mask_logits, target_masks, reduction="none"
-    ).mean(dim=reduce_dims)
+    bce_pixels = (
+        F.binary_cross_entropy_with_logits(mask_logits, target_masks, reduction="none")
+        * valid_pixels
+    )
+    valid_counts = valid_pixels.sum(dim=reduce_dims).clamp_min(1.0)
+    bce_values = bce_pixels.sum(dim=reduce_dims) / valid_counts
     probabilities = mask_logits.sigmoid()
-    intersection = (probabilities * target_masks).sum(dim=reduce_dims)
-    denominator = probabilities.sum(dim=reduce_dims) + target_masks.sum(dim=reduce_dims)
+    intersection = (probabilities * target_masks * valid_pixels).sum(dim=reduce_dims)
+    denominator = (probabilities * valid_pixels).sum(dim=reduce_dims) + (
+        target_masks * valid_pixels
+    ).sum(dim=reduce_dims)
     dice_values = 1.0 - (2.0 * intersection + dice_smooth) / (denominator + dice_smooth)
 
     def per_image_mean(values: torch.Tensor) -> torch.Tensor:
         totals = values.new_zeros(batch_size)
-        counts = values.new_zeros(batch_size)
-        totals.scatter_add_(0, object_image_indices, values)
-        counts.scatter_add_(0, object_image_indices, torch.ones_like(values))
-        return (totals / counts.clamp_min(1.0))[counts > 0].mean()
+        weights = values.new_zeros(batch_size)
+        totals.scatter_add_(0, object_image_indices, values * object_weights)
+        weights.scatter_add_(0, object_image_indices, object_weights)
+        valid = weights > 0
+        if not bool(valid.any()):
+            return values.sum() * 0.0
+        return (totals / weights.clamp_min(1e-8))[valid].mean()
 
     bce = per_image_mean(bce_values)
     dice_loss = per_image_mean(dice_values)

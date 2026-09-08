@@ -18,6 +18,8 @@ class TemporalOutput:
     logit_residual: torch.Tensor
     warp_validity: torch.Tensor
     photometric_residual: torch.Tensor
+    hidden_state: torch.Tensor | None = None
+    visibility_logits: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class TemporalState:
     frame: torch.Tensor
     logits: torch.Tensor
     identity: int | str | None = None
+    hidden_state: torch.Tensor | None = None
 
     @classmethod
     def from_output(
@@ -40,6 +43,9 @@ class TemporalState:
             frame=frame.detach(),
             logits=output.final_logits.detach(),
             identity=identity,
+            hidden_state=(
+                None if output.hidden_state is None else output.hidden_state.detach()
+            ),
         )
 
 
@@ -101,6 +107,19 @@ def warp_backward(
     return warped, validity.to(values.dtype)
 
 
+def resize_flow(flow: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+    """Resize pixel-valued flow while preserving its coordinate units."""
+    if flow.ndim != 4 or flow.shape[1] != 2:
+        raise ValueError("flow must have shape [B,2,H,W].")
+    old_height, old_width = flow.shape[-2:]
+    height, width = size
+    if (old_height, old_width) == size:
+        return flow
+    resized = F.interpolate(flow, size=size, mode="bilinear", align_corners=False)
+    scale = flow.new_tensor((width / old_width, height / old_height)).view(1, 2, 1, 1)
+    return resized * scale
+
+
 class _ConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, *, stride: int = 1) -> None:
         super().__init__()
@@ -142,12 +161,13 @@ class TemporalRefinementBranch(nn.Module):
     segmentation gradients can reach a trainable flow estimator.
     """
 
-    _INPUT_CHANNELS = 14
-
     def __init__(
         self,
         *,
         channels: tuple[int, ...] = (32, 64, 96),
+        feature_channels: int = 0,
+        context_channels: int = 16,
+        hidden_channels: int = 16,
         residual_limit: float = 5.0,
         propagation_gate_bias: float = -3.0,
         residual_gate_bias: float = -2.0,
@@ -155,13 +175,28 @@ class TemporalRefinementBranch(nn.Module):
         super().__init__()
         if not channels or any(channel <= 0 for channel in channels):
             raise ValueError("channels must contain positive integers.")
-        if residual_limit <= 0:
+        if residual_limit <= 0 or min(context_channels, hidden_channels) <= 0:
             raise ValueError("residual_limit must be positive.")
+        if feature_channels < 0:
+            raise ValueError("feature_channels cannot be negative.")
 
         self.residual_limit = float(residual_limit)
+        self.channels = tuple(channels)
+        self.feature_channels = int(feature_channels)
+        self.context_channels = int(context_channels)
+        self.hidden_channels = int(hidden_channels)
+        self.feature_projection = (
+            nn.Conv2d(feature_channels, context_channels, kernel_size=1)
+            if feature_channels
+            else None
+        )
 
         encoder: list[nn.Module] = []
-        in_channels = self._INPUT_CHANNELS
+        # RGB reliability (14), recurrent state, observation metadata (4), and
+        # optional current/warped/difference base-feature context.
+        in_channels = 14 + hidden_channels + 4
+        if feature_channels:
+            in_channels += 3 * context_channels
         for index, out_channels in enumerate(channels):
             encoder.append(
                 _ConvBlock(
@@ -184,6 +219,17 @@ class TemporalRefinementBranch(nn.Module):
 
         self.gate_head = nn.Conv2d(channels[0], 2, kernel_size=1)
         self.residual_head = nn.Conv2d(channels[0], 1, kernel_size=1)
+        self.hidden_candidate = nn.Conv2d(channels[0], hidden_channels, kernel_size=1)
+        self.hidden_gate = nn.Conv2d(
+            channels[0] + hidden_channels, hidden_channels, kernel_size=1
+        )
+        self.visibility_head = nn.Linear(channels[0], 1)
+        self.propagation_strength = nn.Parameter(torch.zeros(()))
+        # The residual convolution is exactly zero at initialization. Its
+        # multiplier starts at one so the zero-valued path can receive a
+        # gradient immediately rather than deadlocking two zero factors.
+        self.residual_strength = nn.Parameter(torch.ones(()))
+        self.missing_base_logit = nn.Parameter(torch.tensor(-4.0))
         nn.init.zeros_(self.gate_head.weight)
         nn.init.constant_(self.gate_head.bias[0], propagation_gate_bias)
         nn.init.constant_(self.gate_head.bias[1], residual_gate_bias)
@@ -204,7 +250,11 @@ class TemporalRefinementBranch(nn.Module):
             raise ValueError(
                 "previous_frame must have the same shape as current_frame."
             )
-        expected_logit_shape = (current_frame.shape[0], 1, *current_frame.shape[-2:])
+        expected_logit_shape = (
+            current_frame.shape[0],
+            1,
+            *current_base_logits.shape[-2:],
+        )
         if current_base_logits.shape != expected_logit_shape:
             raise ValueError(
                 "current_base_logits must have shape "
@@ -216,10 +266,12 @@ class TemporalRefinementBranch(nn.Module):
                 "previous_logits must have shape "
                 f"{expected_logit_shape}, but received {tuple(previous_logits.shape)}."
             )
-        expected_flow_shape = (current_frame.shape[0], 2, *current_frame.shape[-2:])
-        if backward_flow.shape != expected_flow_shape:
+        if backward_flow.ndim != 4 or backward_flow.shape[:2] != (
+            current_frame.shape[0],
+            2,
+        ):
             raise ValueError(
-                f"backward_flow must have shape {expected_flow_shape}, "
+                "backward_flow must have shape [B,2,H,W], "
                 f"but received {tuple(backward_flow.shape)}."
             )
         tensors = (
@@ -273,6 +325,14 @@ class TemporalRefinementBranch(nn.Module):
         current_base_logits: torch.Tensor,
         previous_logits: torch.Tensor,
         backward_flow: torch.Tensor,
+        *,
+        current_features: torch.Tensor | None = None,
+        previous_features: torch.Tensor | None = None,
+        previous_hidden: torch.Tensor | None = None,
+        observation_valid: torch.Tensor | None = None,
+        observation_score: torch.Tensor | None = None,
+        class_agreement: torch.Tensor | None = None,
+        frame_delta: torch.Tensor | None = None,
     ) -> TemporalOutput:
         self._validate_inputs(
             current_frame,
@@ -281,20 +341,118 @@ class TemporalRefinementBranch(nn.Module):
             previous_logits,
             backward_flow,
         )
-        flow = backward_flow
+        output_size = current_base_logits.shape[-2:]
+        flow = resize_flow(backward_flow, output_size)
+        current_frame = F.interpolate(
+            current_frame, size=output_size, mode="bilinear", align_corners=False
+        )
+        previous_frame = F.interpolate(
+            previous_frame, size=output_size, mode="bilinear", align_corners=False
+        )
         propagated_logits, validity = warp_backward(previous_logits, flow)
         warped_previous_frame, _ = warp_backward(previous_frame, flow)
+
+        batch_size, _, height, width = current_base_logits.shape
+
+        def metadata_map(value: torch.Tensor | None, default: float) -> torch.Tensor:
+            if value is None:
+                return current_base_logits.new_full(
+                    (batch_size, 1, height, width), default
+                )
+            value = value.to(
+                device=current_base_logits.device, dtype=current_base_logits.dtype
+            )
+            if value.ndim == 1:
+                value = value[:, None]
+            if value.shape != (batch_size, 1):
+                raise ValueError("Temporal metadata must have shape [B] or [B,1].")
+            return value[:, :, None, None].expand(-1, -1, height, width)
+
+        observation_map = metadata_map(observation_valid, 1.0)
+        score_map = metadata_map(observation_score, 1.0)
+        agreement_map = metadata_map(class_agreement, 1.0)
+        delta_map = metadata_map(frame_delta, 1.0) / 3.0
+        effective_base = torch.where(
+            observation_map > 0.5,
+            current_base_logits,
+            self.missing_base_logit.to(current_base_logits.dtype),
+        )
+        # Rebuild reliability channels with the explicit missing-observation prior.
         inputs, photometric_residual = self._reliability_features(
             current_frame,
             warped_previous_frame,
-            current_base_logits,
+            effective_base,
             propagated_logits,
             flow,
             validity,
         )
+        if previous_hidden is None:
+            previous_hidden = current_base_logits.new_zeros(
+                (batch_size, self.hidden_channels, height, width)
+            )
+        if previous_hidden.shape != (
+            batch_size,
+            self.hidden_channels,
+            height,
+            width,
+        ):
+            raise ValueError("previous_hidden has an incompatible shape.")
+        warped_hidden, _ = warp_backward(previous_hidden, flow)
+        parts = [
+            inputs,
+            warped_hidden,
+            observation_map,
+            score_map,
+            agreement_map,
+            delta_map,
+        ]
+        if self.feature_projection is not None:
+            if current_features is None or previous_features is None:
+                raise ValueError(
+                    "current_features and previous_features are required when "
+                    "feature_channels is non-zero."
+                )
+            expected_features = (
+                batch_size,
+                self.feature_channels,
+                current_features.shape[-2],
+                current_features.shape[-1],
+            )
+            if current_features.shape != expected_features:
+                raise ValueError("current_features has an incompatible shape.")
+            if previous_features.shape != current_features.shape:
+                raise ValueError(
+                    "previous_features must have the same shape as current_features."
+                )
+            if current_features.device != current_base_logits.device:
+                raise ValueError("Base features must be on the temporal branch device.")
+            current_context = self.feature_projection(
+                F.interpolate(
+                    current_features,
+                    size=output_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            )
+            previous_context = self.feature_projection(
+                F.interpolate(
+                    previous_features,
+                    size=output_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            )
+            warped_context, _ = warp_backward(previous_context, flow)
+            parts.extend(
+                [
+                    current_context,
+                    warped_context,
+                    (current_context - warped_context).abs(),
+                ]
+            )
 
         skips: list[torch.Tensor] = []
-        features = inputs
+        features = torch.cat(parts, dim=1)
         for block in self.encoder:
             features = block(features)
             skips.append(features)
@@ -311,11 +469,23 @@ class TemporalRefinementBranch(nn.Module):
         propagation_gate = gate_logits[:, :1].sigmoid() * validity
         residual_gate = gate_logits[:, 1:].sigmoid()
         logit_residual = self.residual_limit * torch.tanh(self.residual_head(features))
-
-        blended_logits = current_base_logits + propagation_gate * (
-            propagated_logits - current_base_logits
+        propagation_scale = torch.tanh(self.propagation_strength)
+        residual_scale = self.residual_strength
+        final_logits = (
+            effective_base
+            + propagation_scale
+            * propagation_gate
+            * (propagated_logits - effective_base)
+            + residual_scale * residual_gate * logit_residual
         )
-        final_logits = blended_logits + residual_gate * logit_residual
+        candidate_hidden = torch.tanh(self.hidden_candidate(features))
+        hidden_gate = torch.sigmoid(
+            self.hidden_gate(torch.cat((features, warped_hidden), dim=1))
+        )
+        hidden_state = (
+            hidden_gate * candidate_hidden + (1.0 - hidden_gate) * warped_hidden
+        )
+        visibility_logits = self.visibility_head(features.mean(dim=(-2, -1)))
         return TemporalOutput(
             final_logits=final_logits,
             propagated_logits=propagated_logits,
@@ -324,6 +494,8 @@ class TemporalRefinementBranch(nn.Module):
             logit_residual=logit_residual,
             warp_validity=validity,
             photometric_residual=photometric_residual,
+            hidden_state=hidden_state,
+            visibility_logits=visibility_logits,
         )
 
 
@@ -332,4 +504,5 @@ __all__ = [
     "TemporalRefinementBranch",
     "TemporalState",
     "warp_backward",
+    "resize_flow",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 import time
 from collections.abc import Sequence
@@ -12,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from datasets import ClassLabel, Dataset
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import get_scheduler
 
 from flowsis.artifacts import atomic_write_text
@@ -43,7 +44,7 @@ from flowsis.data.augment import (
     rotation_augment,
 )
 from flowsis.data.images import get_image
-from flowsis.data.masks import load_binary
+from flowsis.data.masks import load_mask_bundle
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 from flowsis.data.prompts import load_prompt_bank
 from flowsis.matching import match_object_queries, segmentation_objective
@@ -194,9 +195,20 @@ def expand_stages(
 
 
 def load_segmentation_objects(example: dict[str, Any], **_: Any) -> dict[str, Any]:
+    bundles = {}
     for obj in example.get("objects", []):
         if "mask" not in obj:
-            obj["mask"] = load_binary(obj["mask_path"])
+            path = obj["mask_path"]
+            if path not in bundles:
+                bundles[path] = load_mask_bundle(path)
+            bundle = bundles[path]
+            mask_index = int(obj.get("mask_index", 0))
+            if mask_index < 0 or mask_index >= len(bundle.masks):
+                raise IndexError(
+                    f"mask_index {mask_index} is outside bundle {path} with "
+                    f"{len(bundle.masks)} masks."
+                )
+            obj["mask"] = bundle.masks[mask_index]
     return example
 
 
@@ -275,6 +287,16 @@ def _normalized_box(obj: dict[str, Any], example: dict[str, Any]) -> list[float]
     ]
 
 
+def _numeric_image_id(value: object, fallback: int) -> int:
+    if value is None or value == "":
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        digest = hashlib.sha256(str(value).encode()).digest()[:8]
+        return int.from_bytes(digest, "big") & ((1 << 63) - 1)
+
+
 def collate_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[str, Any]:
     image_tensors = [
         image_to_rgb_tensor(get_image(example, convert_mode="RGB")) for example in batch
@@ -302,7 +324,7 @@ def collate_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[st
         "images": images,
         "annotations": [
             {
-                "image_id": int(example.get("image_id", index)),
+                "image_id": _numeric_image_id(example.get("image_id"), index),
                 "annotations": [
                     {
                         "bbox": [float(value) for value in obj["bbox"]],
@@ -325,6 +347,10 @@ def collate_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[st
             [_normalized_box(obj, example) for _, example, obj in records],
             dtype=torch.float32,
         ).reshape(-1, 4),
+        "object_weights": torch.tensor(
+            [float(obj.get("annotation_confidence", 1.0)) for _, _, obj in records],
+            dtype=torch.float32,
+        ),
         "target_masks": (
             torch.stack(masks)
             if masks
@@ -341,10 +367,38 @@ def build_dataloader(
     training: bool,
 ) -> DataLoader:
     generator = torch.Generator().manual_seed(args.seed)
+    sampler = None
+    base_dataset = getattr(dataset, "base_dataset", dataset)
+    columns = set(getattr(base_dataset, "column_names", ()))
+    if training and {"physical_tool_id", "sample_id"} <= columns:
+        tool_ids = [str(value) for value in base_dataset["physical_tool_id"]]
+        sample_ids = [str(value) for value in base_dataset["sample_id"]]
+        samples_by_tool: dict[str, set[str]] = {}
+        images_by_sample: dict[tuple[str, str], int] = {}
+        for tool_id, sample_id in zip(tool_ids, sample_ids, strict=True):
+            sample = sample_id or "<ungrouped>"
+            samples_by_tool.setdefault(tool_id, set()).add(sample)
+            key = (tool_id, sample)
+            images_by_sample[key] = images_by_sample.get(key, 0) + 1
+        weights = [
+            1.0
+            / (
+                len(samples_by_tool[tool_id])
+                * images_by_sample[(tool_id, sample_id or "<ungrouped>")]
+            )
+            for tool_id, sample_id in zip(tool_ids, sample_ids, strict=True)
+        ]
+        sampler = WeightedRandomSampler(
+            weights,
+            num_samples=len(weights),
+            replacement=True,
+            generator=generator,
+        )
     return DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=training,
+        shuffle=training and sampler is None,
+        sampler=sampler,
         num_workers=args.num_workers,
         collate_fn=partial(collate_examples, image_size=args.image_size),
         generator=generator,
@@ -473,6 +527,7 @@ def compute_batch_loss(
     object_labels = batch["object_labels"].to(model.device)
     object_boxes = batch["object_boxes"].to(model.device).clamp(0.0, 1.0)
     target_masks = batch["target_masks"].to(model.device)
+    object_weights = batch["object_weights"].to(model.device)
 
     context = torch.no_grad() if stage == "head" else torch.enable_grad()
     with context, model.detector_autocast_context():
@@ -515,6 +570,7 @@ def compute_batch_loss(
             target_masks,
             object_image_indices,
             batch_size=batch["batch_size"],
+            object_weights=object_weights,
             bce_weight=args.bce_loss_weight,
             dice_weight=args.dice_loss_weight,
             dice_smooth=args.dice_smooth,

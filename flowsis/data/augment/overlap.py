@@ -37,15 +37,13 @@ def _count_connected_components(
 
 def _verify_overlap_example(
     example: dict[str, Any],
-    hard_threshold: float,
-    soft_threshold: float,
-    num_connected_components: int,
+    min_visible_pixels: int,
     connectivity: Literal[4, 8] = 8,
     masks: NDArray[np.bool_] | None = None,
     visible_masks: NDArray[np.bool_] | None = None,
 ) -> bool:
-    if hard_threshold > soft_threshold:
-        raise ValueError("Hard threshold cannot be higher than soft threshold.")
+    if min_visible_pixels <= 0:
+        raise ValueError("min_visible_pixels must be positive.")
     objects = example["objects"]
     if masks is None:
         masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
@@ -62,37 +60,30 @@ def _verify_overlap_example(
             "Masks and visible_masks must be shaped as (num_objects, height, width)."
         )
 
-    visible_area = np.sum(visible_masks, axis=(1, 2), dtype=np.float32)
-    total_area = np.sum(masks, axis=(1, 2), dtype=np.float32)
+    visible_area = np.sum(visible_masks, axis=(1, 2), dtype=np.int64)
+    total_area = np.sum(masks, axis=(1, 2), dtype=np.int64)
     visible_ratios = np.divide(
         visible_area,
         total_area,
-        out=np.zeros(len(masks)),
+        out=np.zeros(len(masks), dtype=np.float32),
         where=total_area > 0,
     )
-    valid = visible_ratios >= soft_threshold
-    maybe = (visible_ratios < soft_threshold) & (visible_ratios >= hard_threshold)
-
-    for i, visible_mask in enumerate(visible_masks):
-        if not maybe[i] or visible_area[i] == 0:
-            continue
-
-        connected_components = _count_connected_components(visible_mask, connectivity)
-        if connected_components <= num_connected_components:
-            valid[i] = True
 
     kept_objects = []
-    for i, (v, obj) in enumerate(zip(valid, objects)):
-        if not v:
+    for i, (obj, visible_mask) in enumerate(zip(objects, visible_masks, strict=True)):
+        if visible_area[i] < min_visible_pixels:
             continue
-
-        current_mask = visible_masks[i]
-        bbox = mask2xywh(current_mask)
+        bbox = mask2xywh(visible_mask)
         assert bbox is not None
         obj["bbox"] = bbox
         obj["area"] = bbox[2] * bbox[3]
-        obj["mask"] = current_mask
-        # obj["visible_mask"] = current_mask
+        obj["mask"] = visible_mask
+        obj["visible_fraction"] = float(visible_ratios[i])
+        obj["visible_pixels"] = int(visible_area[i])
+        obj["visible_components"] = _count_connected_components(
+            visible_mask, connectivity
+        )
+        obj["synthetic_occlusion"] = True
         obj.pop("visible_mask", None)
         obj["modified"] = True
 
@@ -201,20 +192,27 @@ def overlap_augment(
 
     example["objects"] = all_objects
 
-    hard_threshold = kwargs.get("hard_threshold", 0.5)
-    soft_threshold = kwargs.get("soft_threshold", 0.75)
-    num_connected_components = kwargs.get("num_connected_components", 3)
+    min_visible_pixels = kwargs.get("min_visible_pixels", 16)
     connectivity = kwargs.get("connectivity", 8)
 
     is_valid = _verify_overlap_example(
         example,
-        hard_threshold=hard_threshold,
-        soft_threshold=soft_threshold,
-        num_connected_components=num_connected_components,
+        min_visible_pixels=min_visible_pixels,
         connectivity=connectivity,
         masks=np.asarray(all_masks, dtype=np.bool_),
         visible_masks=np.asarray(all_visible_masks, dtype=np.bool_),
     )
+    if is_valid:
+        severe_threshold = float(kwargs.get("severe_visible_fraction", 0.25))
+        severe_probability = float(kwargs.get("severe_occlusion_probability", 0.2))
+        if not 0.0 <= severe_threshold <= 1.0 or not 0.0 <= severe_probability <= 1.0:
+            raise ValueError("Overlap severity controls must be probabilities.")
+        is_severe = any(
+            obj.get("visible_fraction", 1.0) < severe_threshold
+            for obj in example["objects"]
+        )
+        if is_severe and rng.random() >= severe_probability:
+            is_valid = False
     if not is_valid:
         example["image"] = original_image
         example["objects"] = original_objects

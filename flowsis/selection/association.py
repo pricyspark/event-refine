@@ -7,6 +7,28 @@ from scipy.optimize import linear_sum_assignment
 
 from .types import Box, TrackDetection, TrackState
 
+INVALID_COST = 1e9
+
+
+def mask_iou(left: np.ndarray | None, right: np.ndarray | None) -> float | None:
+    if left is None or right is None or left.shape != right.shape:
+        return None
+    left = left.astype(np.bool_, copy=False)
+    right = right.astype(np.bool_, copy=False)
+    union = np.count_nonzero(left | right)
+    return float(np.count_nonzero(left & right) / union) if union else 1.0
+
+
+def cosine_similarity(
+    left: np.ndarray | None, right: np.ndarray | None
+) -> float | None:
+    if left is None or right is None or left.shape != right.shape:
+        return None
+    denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
+    if denominator <= 1e-12:
+        return None
+    return float(np.clip(np.dot(left.ravel(), right.ravel()) / denominator, -1.0, 1.0))
+
 
 def box_area(box: Box) -> float:
     x1, y1, x2, y2 = box
@@ -78,17 +100,39 @@ def gated_cost(
     max_motion: float,
     max_area_change: float,
     label_mismatch_cost: float,
+    mask_weight: float = 1.0,
+    class_weight: float = 0.35,
+    embedding_weight: float = 0.25,
 ) -> float | None:
     prediction = predicted_box(track)
     iou = intersection_over_union(prediction, detection.box)
     motion = normalized_motion(prediction, detection.box)
     area_change = area_ratio(prediction, detection.box)
+    reference_mask = track.warped_mask if track.warped_mask is not None else track.mask
+    mask_overlap = mask_iou(reference_mask, detection.mask)
+    mask_supports_match = mask_overlap is not None and mask_overlap >= min_iou
 
-    if iou < min_iou or motion > max_motion or area_change > max_area_change:
+    if (iou < min_iou and not mask_supports_match) or (
+        not mask_supports_match
+        and (motion > max_motion or area_change > max_area_change)
+    ):
         return None
 
     label_penalty = label_mismatch_cost if track.label != detection.label else 0.0
-    return (1.0 - iou) + 0.35 * motion + 0.15 * area_change + label_penalty
+    class_similarity = cosine_similarity(
+        track.class_distribution, detection.class_distribution
+    )
+    embedding_similarity = cosine_similarity(
+        track.query_embedding, detection.query_embedding
+    )
+    cost = (1.0 - iou) + 0.35 * motion + 0.15 * area_change + label_penalty
+    if mask_overlap is not None:
+        cost += mask_weight * (1.0 - mask_overlap)
+    if class_similarity is not None:
+        cost += class_weight * (1.0 - class_similarity)
+    if embedding_similarity is not None:
+        cost += embedding_weight * (1.0 - embedding_similarity)
+    return cost
 
 
 def build_cost_matrix(
@@ -99,9 +143,12 @@ def build_cost_matrix(
     max_motion: float,
     max_area_change: float,
     label_mismatch_cost: float,
+    mask_weight: float = 1.0,
+    class_weight: float = 0.35,
+    embedding_weight: float = 0.25,
 ) -> np.ndarray:
     cost_matrix = np.full(
-        (len(tracks), len(detections)), fill_value=np.inf, dtype=np.float64
+        (len(tracks), len(detections)), fill_value=INVALID_COST, dtype=np.float64
     )
     for track_index, track in enumerate(tracks):
         for detection_index, detection in enumerate(detections):
@@ -112,6 +159,9 @@ def build_cost_matrix(
                 max_motion=max_motion,
                 max_area_change=max_area_change,
                 label_mismatch_cost=label_mismatch_cost,
+                mask_weight=mask_weight,
+                class_weight=class_weight,
+                embedding_weight=embedding_weight,
             )
             if cost is not None:
                 cost_matrix[track_index, detection_index] = cost
@@ -126,6 +176,9 @@ def assign_detections(
     max_motion: float,
     max_area_change: float,
     label_mismatch_cost: float,
+    mask_weight: float = 1.0,
+    class_weight: float = 0.35,
+    embedding_weight: float = 0.25,
 ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     if not tracks or not detections:
         return [], list(range(len(tracks))), list(range(len(detections)))
@@ -137,6 +190,9 @@ def assign_detections(
         max_motion=max_motion,
         max_area_change=max_area_change,
         label_mismatch_cost=label_mismatch_cost,
+        mask_weight=mask_weight,
+        class_weight=class_weight,
+        embedding_weight=embedding_weight,
     )
 
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -147,7 +203,7 @@ def assign_detections(
     for track_index, detection_index in zip(
         row_ind.tolist(), col_ind.tolist(), strict=True
     ):
-        if not np.isfinite(cost_matrix[track_index, detection_index]):
+        if cost_matrix[track_index, detection_index] >= INVALID_COST:
             continue
         matches.append((track_index, detection_index))
         matched_tracks.add(track_index)
