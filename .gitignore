@@ -37,7 +37,7 @@ flowsis/models/*
 *.arrow
 
 # Generated outputs
-/outputs/
+/outputs/*
 
 # Keep compact baseline records; large/redundant raw archives stay local.
 /experiments/baselines/*/source/
@@ -48,3 +48,59 @@ flowsis/models/*
 # These contain neither source images/masks nor model weights.
 !/experiments/baselines/*/frozen_dataset/**/*.arrow
 !/experiments/baselines/*/prompts/*.pt
+
+# Temporary checkpoint transfer: only the six curated inference checkpoints.
+# Remove this block after transfer to ignore future copies; tracked files must
+# also be removed from the Git index separately. Training state stays ignored.
+!/outputs/base/
+/outputs/base/*
+!/outputs/detectors/
+/outputs/detectors/*
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/
+/outputs/base/dfine-tool-class-epoch18-head10-v1/*
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/
+/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/*
+!/outputs/base/dfine-tool-class-epoch18-v1/
+/outputs/base/dfine-tool-class-epoch18-v1/*
+!/outputs/detectors/dfine-tool-class-20epochs/
+/outputs/detectors/dfine-tool-class-20epochs/*
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/best/
+/outputs/base/dfine-tool-class-epoch18-head10-v1/best/*
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/
+/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/*
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/
+/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/*
+!/outputs/base/dfine-tool-class-epoch18-v1/best/
+/outputs/base/dfine-tool-class-epoch18-v1/best/*
+!/outputs/detectors/dfine-tool-class-20epochs/checkpoint-001170/
+/outputs/detectors/dfine-tool-class-20epochs/checkpoint-001170/*
+!/outputs/detectors/dfine-tool-class-20epochs/final/
+/outputs/detectors/dfine-tool-class-20epochs/final/*
+!/outputs/detectors/dfine-tool-class-20epochs/checkpoint-001170/config.json
+!/outputs/detectors/dfine-tool-class-20epochs/checkpoint-001170/preprocessor_config.json
+!/outputs/detectors/dfine-tool-class-20epochs/checkpoint-001170/flowsis_detector.json
+!/outputs/detectors/dfine-tool-class-20epochs/checkpoint-001170/model.safetensors
+!/outputs/detectors/dfine-tool-class-20epochs/final/config.json
+!/outputs/detectors/dfine-tool-class-20epochs/final/preprocessor_config.json
+!/outputs/detectors/dfine-tool-class-20epochs/final/flowsis_detector.json
+!/outputs/detectors/dfine-tool-class-20epochs/final/model.safetensors
+!/outputs/base/dfine-tool-class-epoch18-v1/best/config.json
+!/outputs/base/dfine-tool-class-epoch18-v1/best/preprocessor_config.json
+!/outputs/base/dfine-tool-class-epoch18-v1/best/flowsis_detector.json
+!/outputs/base/dfine-tool-class-epoch18-v1/best/model.safetensors
+!/outputs/base/dfine-tool-class-epoch18-v1/best/base.pt
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/best/config.json
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/best/preprocessor_config.json
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/best/flowsis_detector.json
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/best/model.safetensors
+!/outputs/base/dfine-tool-class-epoch18-head10-v1/best/base.pt
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/config.json
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/preprocessor_config.json
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/flowsis_detector.json
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/model.safetensors
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/best/base.pt
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/config.json
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/preprocessor_config.json
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/flowsis_detector.json
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/model.safetensors
+!/outputs/base/dfine-tool-class-epoch18-head10neck3all2-v1/checkpoint-000518/base.pt
