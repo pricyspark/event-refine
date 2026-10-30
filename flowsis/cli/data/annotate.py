@@ -155,12 +155,14 @@ def show_candidates(
     figure, axis = plt.subplots(figsize=(8, 8))
     axis.imshow(image)
     colors = plt.get_cmap("tab20")
+    boxes: list[list[int]] = []
     for index, candidate in enumerate(candidates):
         overlay = np.zeros((*candidate.mask.shape, 4), dtype=np.float32)
         overlay[candidate.mask] = (*colors(index % 20)[:3], 0.48)
-        axis.imshow(overlay)
+        axis.imshow(overlay, interpolation="nearest")
         box = mask2xywh(candidate.mask)
         if box is not None:
+            boxes.append(box)
             x, y, width, height = box
             axis.text(
                 x,
@@ -172,6 +174,20 @@ def show_candidates(
             axis.add_patch(
                 plt.Rectangle((x, y), width, height, fill=False, color=colors(index))
             )
+    if boxes:
+        left = min(box[0] for box in boxes)
+        top = min(box[1] for box in boxes)
+        right = max(box[0] + box[2] for box in boxes)
+        bottom = max(box[1] + box[3] for box in boxes)
+        padding = max(1, int(np.ceil(0.2 * max(right - left, bottom - top))))
+        axis.set_xlim(
+            max(0, left - padding) - 0.5,
+            min(image.width, right + padding) - 0.5,
+        )
+        axis.set_ylim(
+            min(image.height, bottom + padding) - 0.5,
+            max(0, top - padding) - 0.5,
+        )
     axis.set_title(title)
     axis.axis("off")
     plt.tight_layout()
@@ -292,17 +308,102 @@ def review_candidates(
         print("Invalid review command.")
 
 
+def merge_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Union one prompt's tool fragments, keeping the strongest candidate's metadata."""
+    if len(candidates) < 2:
+        return candidates
+    strongest = max(candidates, key=lambda candidate: candidate.score)
+    return [
+        replace(
+            strongest,
+            mask=np.logical_or.reduce([candidate.mask for candidate in candidates]),
+        )
+    ]
+
+
 class Sam3ImageBackend:
-    def __init__(self, model_name: str, device: torch.device, threshold: float) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        device: torch.device,
+        threshold: float,
+        *,
+        refine_crop: bool = True,
+        single_tool: bool = False,
+    ) -> None:
         from transformers import Sam3Model, Sam3Processor
 
         self.model = Sam3Model.from_pretrained(model_name).to(device).eval()
         self.processor = Sam3Processor.from_pretrained(model_name)
         self.device = device
         self.threshold = threshold
+        self.refine_crop = refine_crop
+        self.single_tool = single_tool
+
+    def predict(
+        self, images: Sequence[Image.Image], prompts: Sequence[str]
+    ) -> list[list[Candidate]]:
+        candidates = self._predict(images, prompts)
+        if self.single_tool:
+            candidates = [merge_candidates(result) for result in candidates]
+        if not self.refine_crop:
+            return candidates
+
+        crops: list[Image.Image] = []
+        crop_prompts: list[str] = []
+        regions: list[tuple[int, int, int, int, int]] = []
+        for index, (image, prompt, initial) in enumerate(
+            zip(images, prompts, candidates, strict=True)
+        ):
+            initial = deduplicate_candidates(initial)
+            if len(initial) != 1:
+                continue
+            box = mask2xywh(initial[0].mask)
+            if box is None:
+                continue
+            x, y, width, height = box
+            padding = max(1, int(np.ceil(0.2 * max(width, height))))
+            left, top = max(0, x - padding), max(0, y - padding)
+            right = min(image.width, x + width + padding)
+            bottom = min(image.height, y + height + padding)
+            if (left, top, right, bottom) == (0, 0, image.width, image.height):
+                continue
+            crops.append(image.crop((left, top, right, bottom)))
+            crop_prompts.append(prompt)
+            regions.append((index, left, top, right, bottom))
+
+        if not crops:
+            return candidates
+        refined = self._predict(crops, crop_prompts)
+        if self.single_tool:
+            refined = [merge_candidates(result) for result in refined]
+        for (index, left, top, right, bottom), result in zip(
+            regions, refined, strict=True
+        ):
+            result = deduplicate_candidates(result)
+            if len(result) != 1:
+                continue
+            candidate = result[0]
+            mask = candidate.mask
+            image = images[index]
+            if (
+                (left > 0 and mask[:, 0].any())
+                or (top > 0 and mask[0, :].any())
+                or (right < image.width and mask[:, -1].any())
+                or (bottom < image.height and mask[-1, :].any())
+            ):
+                # A mask touching an interior crop edge may cut off the tool.
+                continue
+            full_mask = np.zeros((image.height, image.width), dtype=np.bool_)
+            full_mask[top:bottom, left:right] = mask
+            original = deduplicate_candidates(candidates[index])[0]
+            candidates[index] = [
+                replace(candidate, mask=full_mask, identity=original.identity)
+            ]
+        return candidates
 
     @torch.inference_mode()
-    def predict(
+    def _predict(
         self, images: Sequence[Image.Image], prompts: Sequence[str]
     ) -> list[list[Candidate]]:
         inputs = self.processor(
@@ -407,7 +508,13 @@ def annotate_images(args: argparse.Namespace) -> None:
     )
     review = ReviewLog(args.review_log)
     device = torch.device(args.device) if args.device else get_device()
-    backend = Sam3ImageBackend(args.model, device, args.threshold)
+    backend = Sam3ImageBackend(
+        args.model,
+        device,
+        args.threshold,
+        refine_crop=args.refine_crop,
+        single_tool=args.single_tool,
+    )
     root = manifest.parent
     aliases = load_taxonomy_aliases(args.aliases_json)
     missing = [
@@ -723,19 +830,37 @@ def parse_args() -> argparse.Namespace:
     images = commands.add_parser("images")
     _shared(images)
     images.add_argument(
-        "--manifest", type=Path, default=Path("data/new/image_manifest.csv")
+        "--manifest", type=Path, default=Path("data/image_manifest.csv")
     )
     images.add_argument(
         "--object-manifest",
         type=Path,
-        default=Path("data/new/image_object_manifest.csv"),
+        default=Path("data/image_object_manifest.csv"),
     )
-    images.add_argument("--mask-dir", type=Path, default=Path("data/new/masks/images"))
+    images.add_argument("--mask-dir", type=Path, default=Path("data/masks/images"))
     images.add_argument(
-        "--review-log", type=Path, default=Path("data/new/image_review.jsonl")
+        "--review-log", type=Path, default=Path("data/image_review.jsonl")
     )
     images.add_argument("--batch-size", type=int, default=4)
     images.add_argument("--threshold", type=float, default=0.5)
+    images.add_argument(
+        "--single-tool",
+        action="store_true",
+        help=(
+            "For images containing one tool, merge masks from each prompt into "
+            "one object in both inference passes (useful for open scissors)."
+        ),
+    )
+    images.add_argument(
+        "--refine-crop",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Refine single-tool masks with a second SAM3 pass on a padded crop "
+            "(default: enabled). Keep the original prediction if refinement is "
+            "ambiguous or touches an interior crop edge."
+        ),
+    )
     images.add_argument(
         "--image-prompt",
         choices=("tool-class", "name-and-class"),
@@ -759,17 +884,17 @@ def parse_args() -> argparse.Namespace:
     videos = commands.add_parser("videos")
     _shared(videos)
     videos.add_argument(
-        "--manifest", type=Path, default=Path("data/new/video_manifest.csv")
+        "--manifest", type=Path, default=Path("data/video_manifest.csv")
     )
-    videos.add_argument("--video-dir", type=Path, default=Path("data/new/videos"))
+    videos.add_argument("--video-dir", type=Path, default=Path("data/videos"))
     videos.add_argument(
         "--object-manifest",
         type=Path,
-        default=Path("data/new/video_object_manifest.csv"),
+        default=Path("data/video_object_manifest.csv"),
     )
-    videos.add_argument("--mask-dir", type=Path, default=Path("data/new/masks/videos"))
+    videos.add_argument("--mask-dir", type=Path, default=Path("data/masks/videos"))
     videos.add_argument(
-        "--review-log", type=Path, default=Path("data/new/video_review.jsonl")
+        "--review-log", type=Path, default=Path("data/video_review.jsonl")
     )
     videos.add_argument("--video-id")
     videos.add_argument("--start-frame", type=int, default=0)

@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "--dataset-path", type=str, default="data/new/segmentation-dataset"
+        "--dataset-path", type=str, default="data/segmentation-dataset"
     )
     parser.add_argument("--dataset-name", type=str, default=None)
     parser.add_argument("--dataset-config", type=str, default=None)

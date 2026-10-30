@@ -31,6 +31,24 @@ flowsis-annotate videos \
   --start-frame 0 --end-frame 600
 ```
 
+Image annotation uses two SAM3 passes by default: a full-image prediction locates
+the tool, then a crop of the original image is segmented with the same prompt.
+The crop includes padding equal to 20% of the tool box's longest dimension on
+each side. Refined masks are placed back in original-image coordinates for
+review and saving. This also applies to interactive re-prompts. Refinement adds
+one inference pass for eligible images; use `--no-refine-crop` to disable it.
+For datasets with one tool per image, run `flowsis-annotate images --single-tool`.
+This merges masks from each prompt in both passes, so open scissors split into
+two predictions are reviewed and saved as one object. The displayed score is
+the highest component score, not a separate confidence estimate for the union.
+The flag also applies to re-prompts and works with `--no-refine-crop`.
+Leave it off for images with multiple tools to keep instances separate.
+
+Images without exactly one candidate after merging (if enabled) and deduplication,
+or whose padded crop
+covers the full image, skip refinement. An empty or ambiguous crop prediction,
+or a mask touching an interior crop edge, falls back to the first-pass result.
+
 Image annotation prompts SAM3 with the row's coarse `Tool Class` by default,
 giving prompts such as `scissors`. The optional `--image-prompt
 name-and-class` mode combines the canonical fine name and class, such as `iris
@@ -70,7 +88,7 @@ Build separate Arrow datasets after review:
 ```bash
 flowsis-build-annotated-dataset
 flowsis-author-text-prompts
-# Review/edit data/new/text_prompts.json.
+# Review/edit data/text_prompts.json.
 flowsis-embed-text-prompts
 flowsis-build-temporal-dataset
 ```
@@ -81,7 +99,7 @@ complete name such as `mayo scissors` is not duplicated. The original columns
 remain separate and unchanged in the manifests and Arrow object metadata.
 
 `flowsis-author-text-prompts` interactively asks for one visual description per
-class and writes three prompts per class to `data/new/text_prompts.json`: the
+class and writes three prompts per class to `data/text_prompts.json`: the
 full canonical label, the exact Transformers SigLIP2 pipeline template (`This
 is a photo of {label}.`), and the manually authored description. Progress is
 saved after every description, and rerunning the command resumes the existing
@@ -94,7 +112,7 @@ core environment:
 pip install -e '.[prompt-generation]'
 export OPENAI_API_KEY="..."
 flowsis-generate-text-prompts
-# Review/edit data/new/text_prompts.json before embedding it.
+# Review/edit data/text_prompts.json before embedding it.
 ```
 
 The generator sends only the canonical taxonomy, not images or annotations. It
@@ -109,7 +127,7 @@ To edit JSON directly instead, first write a scaffold:
 
 ```bash
 flowsis-author-text-prompts --scaffold
-$EDITOR data/new/text_prompts.json
+$EDITOR data/text_prompts.json
 ```
 
 Fill the third string for every class. The embedding command rejects empty or
@@ -121,7 +139,7 @@ Review or edit each description (the third string) before running
 `flowsis-embed-text-prompts`. Embedding is deliberately a separate,
 deterministic step: it validates all three prompt types against the current
 Arrow taxonomy, then stores their pooled SigLIP2 vectors in
-`data/new/text-embeddings`. Use `--prompt-suite PATH` to embed a different
+`data/text-embeddings`. Use `--prompt-suite PATH` to embed a different
 reviewed suite with the same contract.
 
 Write the description as a compact noun phrase beginning with the complete
@@ -147,7 +165,7 @@ example:
 ```bash
 flowsis-embed-text-prompts \
   --prompt-type description \
-  --output-dir data/new/text-embeddings-description-only
+  --output-dir data/text-embeddings-description-only
 ```
 
 Repeat `--prompt-type` to test a subset; omitting it embeds all three.
@@ -169,7 +187,7 @@ temporal training:
 
 ```bash
 flowsis-train-temporal \
-  --dataset-path data/new/temporal-dataset \
+  --dataset-path data/temporal-dataset \
   --base-model outputs/base/best \
   --output-dir outputs/temporal
 ```
@@ -179,15 +197,52 @@ with mandatory still-image replay:
 
 ```bash
 flowsis-train-temporal \
-  --dataset-path data/new/temporal-dataset \
+  --dataset-path data/temporal-dataset \
   --base-model outputs/base/best \
   --finetune-mask-head \
-  --still-dataset-path data/new/segmentation-dataset
+  --still-dataset-path data/segmentation-dataset
 ```
 
 Preferred-track labels are stored but have weight 1 by default. A controlled
 2× ablation uses `--preferred-track-weight 2`; it is not part of the initial
 training recipe.
+
+Frozen optical-flow inference can be cached persistently, on demand:
+
+```bash
+flowsis-train-temporal \
+  --dataset-path data/temporal-dataset \
+  --base-model outputs/base/best \
+  --output-dir outputs/temporal \
+  --flow-cache-dir data/flow-cache \
+  --flow-cache-batch-size 2
+```
+
+Both training and validation reuse this cache. The batch-size option limits
+the number of cache misses evaluated in one flow forward pass. Entries store
+backward flow at the training image resolution and estimator output precision.
+Keys include the actual ordered input tensors, so each stride, crop, resize,
+and flipped orientation is computed separately; adjacent flows are not composed
+to approximate larger strides. Model weights and execution precision distinguish
+cache namespaces/entries. The cache remains usable with mask-head fine-tuning
+because the flow estimator stays frozen. Recurrent logits and hidden states are
+still warped online.
+
+Caching is optional: full-resolution flows can consume substantial disk space,
+and hashing, disk reads, and host/device transfers can outweigh inference savings
+on slow storage. The first encounter with a pair computes and atomically saves
+it; later encounters load it. Cache files can be removed to reclaim space.
+Base-output caching is deferred because the current refiner also requires shared
+pixel features and observation metadata, beyond mask logits.
+
+Future sampling experiment: compare the current uniform-video random sampler
+with nonoverlapping snippets partitioned within continuous annotated runs.
+Randomize offsets each training epoch, shuffle snippets across videos, and keep
+validation partitions fixed. Normalize each video's total contribution by its
+snippet count so long videos do not receive more weight. Compare at equal compute
+or supervised-frame budgets and measure discarded-tail coverage, long-sequence
+accuracy, recovery, and temporal consistency before changing the default.
+Disjoint sampling is not implemented yet.
 
 Measure the complete detector, mask head, flow, tracking, recurrence, and
 selection path rather than extrapolating from component timings:
@@ -196,5 +251,5 @@ selection path rather than extrapolating from component timings:
 flowsis-profile-temporal \
   --base-model outputs/base/best \
   --temporal-model outputs/temporal/temporal-best.pt \
-  --video-source data/new/videos/20260901_191034.mp4
+  --video-source data/videos/20260901_191034.mp4
 ```

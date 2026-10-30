@@ -128,12 +128,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-path",
         type=Path,
-        default=Path("data/new/segmentation-dataset"),
+        default=Path("data/segmentation-dataset"),
     )
     parser.add_argument(
         "--output-path",
         type=Path,
-        default=Path("data/new/text_prompts.json"),
+        default=Path("data/text_prompts.json"),
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(

@@ -23,7 +23,7 @@ from flowsis.utils import get_device
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_detector_arguments(parser)
-    parser.add_argument("--dataset-path", default="data/new/segmentation-dataset")
+    parser.add_argument("--dataset-path", default="data/segmentation-dataset")
     parser.add_argument("--split", default="test")
     parser.add_argument("--output-dir", default="outputs/detector-evaluation")
     parser.add_argument("--batch-size", type=int, default=8)

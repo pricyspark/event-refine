@@ -277,20 +277,20 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build reviewed temporal Arrow data.")
     parser.add_argument(
-        "--video-manifest", type=Path, default=Path("data/new/video_manifest.csv")
+        "--video-manifest", type=Path, default=Path("data/video_manifest.csv")
     )
     parser.add_argument(
         "--object-manifest",
         type=Path,
-        default=Path("data/new/video_object_manifest.csv"),
+        default=Path("data/video_object_manifest.csv"),
     )
     parser.add_argument(
-        "--review-log", type=Path, default=Path("data/new/video_review.jsonl")
+        "--review-log", type=Path, default=Path("data/video_review.jsonl")
     )
     parser.add_argument("--aliases-json", type=Path)
-    parser.add_argument("--mask-dir", type=Path, default=Path("data/new/masks/videos"))
+    parser.add_argument("--mask-dir", type=Path, default=Path("data/masks/videos"))
     parser.add_argument(
-        "--output-path", type=Path, default=Path("data/new/temporal-dataset")
+        "--output-path", type=Path, default=Path("data/temporal-dataset")
     )
     parser.add_argument("--train-size", type=float, default=0.7)
     parser.add_argument("--validation-size", type=float, default=0.15)

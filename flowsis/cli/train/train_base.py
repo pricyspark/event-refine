@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train the end-to-end set-based FlowSIS segmentation model."
     )
-    parser.add_argument("--dataset-path", default="data/new/segmentation-dataset")
+    parser.add_argument("--dataset-path", default="data/segmentation-dataset")
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--validation-split", default="validation")
     parser.add_argument(

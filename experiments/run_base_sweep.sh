@@ -18,8 +18,8 @@ if [[ -z "${suite}" ]]; then
 fi
 shift
 
-text_embeddings_dir=${TEXT_EMBEDDINGS_DIR:-data/new/text-embeddings}
-dataset_path=${DATASET_PATH:-data/new/segmentation-dataset}
+text_embeddings_dir=${TEXT_EMBEDDINGS_DIR:-data/text-embeddings}
+dataset_path=${DATASET_PATH:-data/segmentation-dataset}
 output_root=${OUTPUT_ROOT:-outputs/experiments/base}
 primary_model=${PRIMARY_MODEL:-outputs/good/dfine-l-single}
 dfine_model=${DFINE_MODEL:-outputs/good/dfine-l-single}

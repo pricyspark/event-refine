@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import cv2
 import torch
 
 from flowsis.cli.common import add_detector_arguments, log_event
-from flowsis.cli.deploy.common import center_square, resolve_video_source
+from flowsis.cli.deploy.common import FrameRecorder, center_square, resolve_video_source
 from flowsis.pretrained import load_detector
 from flowsis.utils import get_device
 
@@ -41,6 +42,12 @@ def parse_args() -> argparse.Namespace:
         help="Minimum detection score.",
     )
     parser.add_argument("--image-size", type=int, default=640)
+    parser.add_argument(
+        "--record-dir",
+        type=Path,
+        default=Path("recordings"),
+        help="Save MP4 recordings here when r toggles recording in the live window.",
+    )
     parser.add_argument("--device", default=None)
     parser.add_argument(
         "--cpu-preprocess",
@@ -145,6 +152,7 @@ def main() -> None:
     capture = cv2.VideoCapture(resolve_video_source(args.video_source))
     if not capture.isOpened():
         raise RuntimeError(f"Unable to open video source: {args.video_source}")
+    recorder = FrameRecorder(args.record_dir, float(capture.get(cv2.CAP_PROP_FPS)))
     try:
         while True:
             ok, frame_bgr = capture.read()
@@ -158,18 +166,22 @@ def main() -> None:
                 device_preprocess=not args.cpu_preprocess,
             )
             elapsed_ms = (time.perf_counter() - start) * 1000.0
-            cv2.imshow(
-                WINDOW_NAME,
-                draw_detections(
-                    frame_bgr,
-                    result.detections[0],
-                    label_names=detector.label_names,
-                    inference_ms=elapsed_ms,
-                ),
+            rendered = draw_detections(
+                frame_bgr,
+                result.detections[0],
+                label_names=detector.label_names,
+                inference_ms=elapsed_ms,
             )
-            if cv2.waitKey(1) & 0xFF in {27, ord("q")}:
+            recorder.write(rendered)
+            recorder.draw_status(rendered)
+            cv2.imshow(WINDOW_NAME, rendered)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("r"):
+                recorder.toggle()
+            if key in {27, ord("q")}:
                 break
     finally:
+        recorder.close()
         capture.release()
         cv2.destroyAllWindows()
 

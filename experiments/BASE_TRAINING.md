@@ -16,7 +16,7 @@ class logits are usable as-is. Create the control without detector updates:
 flowsis-train-detector \
   --detector dfine \
   --model ustc-community/dfine-large-obj365 \
-  --dataset-path data/new/segmentation-dataset \
+  --dataset-path data/segmentation-dataset \
   --max-steps 0 \
   --epochs 1 \
   --output-dir outputs/controls/dfine-large-official-adapted

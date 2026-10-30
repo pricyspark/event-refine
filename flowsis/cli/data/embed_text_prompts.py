@@ -83,18 +83,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-path",
         type=Path,
-        default=Path("data/new/segmentation-dataset"),
+        default=Path("data/segmentation-dataset"),
     )
     parser.add_argument(
         "--prompt-suite",
         type=Path,
-        default=Path("data/new/text_prompts.json"),
+        default=Path("data/text_prompts.json"),
         help="Reviewed JSON created by flowsis-author-text-prompts.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/new/text-embeddings"),
+        default=Path("data/text-embeddings"),
     )
     parser.add_argument(
         "--prompt-type",

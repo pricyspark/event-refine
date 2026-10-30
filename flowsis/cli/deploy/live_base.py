@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from flowsis.base_checkpoint import load_base
-from flowsis.cli.deploy.common import center_square, resolve_video_source
+from flowsis.cli.deploy.common import FrameRecorder, center_square, resolve_video_source
 from flowsis.set_mask import BasePrediction
 from flowsis.utils import get_device
 
@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
         help="Use 'live', a camera index, or a video file path.",
     )
     parser.add_argument("--output-path", type=Path)
+    parser.add_argument(
+        "--record-dir",
+        type=Path,
+        default=Path("recordings"),
+        help="Save MP4 recordings here when r toggles recording in the live window.",
+    )
     parser.add_argument("--device", default=None)
     parser.add_argument("--detection-threshold", type=float)
     parser.add_argument("--mask-threshold", type=float, default=0.5)
@@ -156,6 +162,7 @@ def main() -> None:
     if not capture.isOpened():
         raise RuntimeError(f"Unable to open video source: {args.video_source}")
     writer: cv2.VideoWriter | None = None
+    recorder = FrameRecorder(args.record_dir, float(capture.get(cv2.CAP_PROP_FPS)))
     frame_count = 0
     try:
         while args.max_frames is None or frame_count < args.max_frames:
@@ -178,6 +185,7 @@ def main() -> None:
                 mask_alpha=args.mask_alpha,
                 elapsed_ms=(time.perf_counter() - started) * 1000.0,
             )
+            recorder.write(rendered)
             if args.output_path is not None:
                 if writer is None:
                     writer = open_writer(
@@ -187,11 +195,16 @@ def main() -> None:
                     )
                 writer.write(rendered)
             if not args.no_display:
+                recorder.draw_status(rendered)
                 cv2.imshow(WINDOW_NAME, rendered)
-                if cv2.waitKey(1) & 0xFF in {27, ord("q")}:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("r"):
+                    recorder.toggle()
+                if key in {27, ord("q")}:
                     break
             frame_count += 1
     finally:
+        recorder.close()
         capture.release()
         if writer is not None:
             writer.release()

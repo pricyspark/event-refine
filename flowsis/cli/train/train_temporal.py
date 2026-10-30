@@ -338,7 +338,7 @@ def _still_replay_loader(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the residual temporal refiner.")
     parser.add_argument(
-        "--dataset-path", type=Path, default=Path("data/new/temporal-dataset")
+        "--dataset-path", type=Path, default=Path("data/temporal-dataset")
     )
     parser.add_argument("--base-model", required=True)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/temporal"))

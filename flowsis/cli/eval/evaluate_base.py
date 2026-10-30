@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
         description="Evaluate set-based FlowSIS instance and union segmentation."
     )
     parser.add_argument("--model-path", type=Path, default=Path("outputs/base/final"))
-    parser.add_argument("--dataset-path", default="data/new/segmentation-dataset")
+    parser.add_argument("--dataset-path", default="data/segmentation-dataset")
     parser.add_argument("--split", default="test")
     parser.add_argument(
         "--output-path", type=Path, default=Path("outputs/base-eval.json")

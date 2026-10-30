@@ -9,7 +9,7 @@ from flowsis.data.loaders import load_local_dataset
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
-DEFAULT_DATASET_PATH = Path("data/new/segmentation-dataset")
+DEFAULT_DATASET_PATH = Path("data/segmentation-dataset")
 DEFAULT_OUTPUT_DIR = Path("outputs/dataset_visualization")
 
 

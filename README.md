@@ -26,14 +26,14 @@ receives the same number of `[P,768]` prompt vectors.
 ```bash
 flowsis-build-annotated-dataset
 flowsis-author-text-prompts
-# Review/edit data/new/text_prompts.json before embedding it.
+# Review/edit data/text_prompts.json before embedding it.
 flowsis-embed-text-prompts
 flowsis-train-detector --detector dfine
 
 flowsis-train-base \
   --detector-model outputs/detectors/dfine/final \
-  --text-embeddings-dir data/new/text-embeddings \
-  --dataset-path data/new/segmentation-dataset \
+  --text-embeddings-dir data/text-embeddings \
+  --dataset-path data/segmentation-dataset \
   --train-stages head:5,neck:3,all:2 \
   --output-dir outputs/base
 ```
@@ -51,8 +51,8 @@ For a quick end-to-end plumbing test, bound both training and validation work:
 ```bash
 flowsis-train-base \
   --detector-model outputs/good/dfine-m-single \
-  --text-embeddings-dir data/new/text-embeddings \
-  --dataset-path data/new/segmentation-dataset \
+  --text-embeddings-dir data/text-embeddings \
+  --dataset-path data/segmentation-dataset \
   --output-dir outputs/base-smoke \
   --train-stages head:1 \
   --max-train-images 20 \
@@ -103,22 +103,22 @@ prompt files are only needed when starting a new training run.
 ```bash
 flowsis-evaluate-base \
   --model-path outputs/base/best \
-  --dataset-path data/new/segmentation-dataset \
+  --dataset-path data/segmentation-dataset \
   --split test
 
 # Same-checkpoint reliance tests; retraining is still required for causal claims
 flowsis-ablate-base \
   --model-path outputs/base/best \
-  --dataset-path data/new/segmentation-dataset \
+  --dataset-path data/segmentation-dataset \
   --split test
 
 flowsis-live-base \
   --model-path outputs/base/best \
-  --video-source data/new/videos/20260901_191034.mp4
+  --video-source data/videos/20260901_191034.mp4
 
 flowsis-profile-base \
   --model-path outputs/base/best \
-  --video-source data/new/videos/20260901_191034.mp4
+  --video-source data/videos/20260901_191034.mp4
 ```
 
 Evaluation reports class-aware matched and oracle-query mask quality, union
