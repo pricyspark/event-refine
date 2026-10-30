@@ -1,0 +1,106 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "image_path": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "video_path": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "frame_index": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "image_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "height": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "width": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "tool_ids": {
+      "feature": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "sample_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "capture_session_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "objects": {
+      "feature": {
+        "instance_id": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "area": {
+          "dtype": "float32",
+          "_type": "Value"
+        },
+        "bbox": {
+          "feature": {
+            "dtype": "float32",
+            "_type": "Value"
+          },
+          "length": 4,
+          "_type": "List"
+        },
+        "category": {
+          "names": [
+            "bonepunch",
+            "forceps",
+            "gouge",
+            "mallet",
+            "osteotome",
+            "pliers",
+            "retractor",
+            "rongeur",
+            "scissors"
+          ],
+          "_type": "ClassLabel"
+        },
+        "tool_name": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "tool_class": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "tool_id": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "mask_path": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "mask_index": {
+          "dtype": "int64",
+          "_type": "Value"
+        },
+        "annotation_confidence": {
+          "dtype": "float32",
+          "_type": "Value"
+        }
+      },
+      "_type": "List"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}

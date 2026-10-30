@@ -1,0 +1,47 @@
+{
+  "bonepunch": [
+    "bonepunch",
+    "This is a photo of bonepunch.",
+    "bonepunch with a long straight shaft, a small angled biting tip, and offset lever handles"
+  ],
+  "forceps": [
+    "forceps",
+    "This is a photo of forceps.",
+    "forceps with opposing grasping tips on paired arms, straight or curved jaws, and tweezer-like or hinged handles"
+  ],
+  "gouge": [
+    "gouge",
+    "This is a photo of gouge.",
+    "gouge with a slender rigid shaft and a narrow concave blade forming a lengthwise channel with a curved cutting edge"
+  ],
+  "mallet": [
+    "mallet",
+    "This is a photo of mallet.",
+    "mallet with a cylindrical head set across a narrow shaft and an elongated grip"
+  ],
+  "osteotome": [
+    "osteotome",
+    "This is a photo of osteotome.",
+    "osteotome with a straight rigid shaft and a flat chisel blade ending in a beveled cutting edge"
+  ],
+  "pliers": [
+    "pliers",
+    "This is a photo of pliers.",
+    "pliers with two curved handles joined at a pivot and short opposing jaws forming a pointed or blunt gripping head"
+  ],
+  "retractor": [
+    "retractor",
+    "This is a photo of retractor.",
+    "retractor with finger-ring handles, a locking hinge, and two long spreading arms ending in outward-facing hooks"
+  ],
+  "rongeur": [
+    "rongeur",
+    "This is a photo of rongeur.",
+    "rongeur with sturdy curved handles, a spring between the handles, and compound hinges leading to short opposing cupped jaws"
+  ],
+  "scissors": [
+    "scissors",
+    "This is a photo of scissors.",
+    "scissors with two opposing blades joined at a pivot and finger-ring handles, with straight, curved, or angled blades"
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "method": "codex_assisted_manual_draft",
+  "api_used": false,
+  "instructions": "You write visual descriptions for surgical-instrument recognition.\n\nFor each supplied canonical label, produce one concise noun phrase that:\n- starts with the exact canonical label;\n- adds stable, visible features that distinguish it from the other supplied labels;\n- prioritizes shape, shaft, jaws, blades, tips, teeth, serrations, handles,\n  fenestrations, and other geometry visible in a photograph;\n- describes only appearance, not use, procedure, anatomy, scene, hands, tissue,\n  blood, labels, masks, or embeddings;\n- does not add generic features merely to make the phrase longer;\n- does not invent a feature when the label does not imply one.\n\nConsider the complete taxonomy together. Return exactly one entry for every label.\n",
+  "taxonomy": {
+    "bonepunch": "bonepunch",
+    "forceps": "forceps",
+    "gouge": "gouge",
+    "mallet": "mallet",
+    "osteotome": "osteotome",
+    "pliers": "pliers",
+    "retractor": "retractor",
+    "rongeur": "rongeur",
+    "scissors": "scissors"
+  },
+  "dataset_path": "../flowsis-data/data/segmentation-dataset",
+  "reference_split": "train",
+  "reference_images": [
+    {
+      "label": "scissors",
+      "tool_name": "iris",
+      "image_id": "image-bbaec2e74ea8bbf3"
+    },
+    {
+      "label": "pliers",
+      "tool_name": "ruskin_rongeur",
+      "image_id": "image-9a099d88fe68c199"
+    },
+    {
+      "label": "scissors",
+      "tool_name": "metzenbaum",
+      "image_id": "image-ab168fff52107709"
+    },
+    {
+      "label": "bonepunch",
+      "tool_name": "kerrison",
+      "image_id": "image-a4869694d3692079"
+    },
+    {
+      "label": "mallet",
+      "tool_name": "surgical",
+      "image_id": "image-97846043ee9f6f5d"
+    },
+    {
+      "label": "pliers",
+      "tool_name": "lineman",
+      "image_id": "image-e4cce5b0c878d79d"
+    },
+    {
+      "label": "forceps",
+      "tool_name": "rowes_maxillary",
+      "image_id": "image-611e2dfcc4e38df3"
+    },
+    {
+      "label": "retractor",
+      "tool_name": "gelpi",
+      "image_id": "image-ca23d537b27a55e7"
+    },
+    {
+      "label": "forceps",
+      "tool_name": "hunt_tumor",
+      "image_id": "image-fabe4ff9e9445640"
+    },
+    {
+      "label": "scissors",
+      "tool_name": "mueller_bandage",
+      "image_id": "image-62f135d56404d5fd"
+    },
+    {
+      "label": "gouge",
+      "tool_name": "killian_septum",
+      "image_id": "image-f7b2b5146a0450b6"
+    },
+    {
+      "label": "osteotome",
+      "tool_name": "epker",
+      "image_id": "image-82f1bd8c37531d58"
+    },
+    {
+      "label": "osteotome",
+      "tool_name": "french_pattern",
+      "image_id": "image-53d4b609e6b15ed4"
+    },
+    {
+      "label": "osteotome",
+      "tool_name": "tessier",
+      "image_id": "image-8cf0b42dd1a596b8"
+    },
+    {
+      "label": "forceps",
+      "tool_name": "nonmagnetic_micro",
+      "image_id": "image-92c7193985532478"
+    },
+    {
+      "label": "scissors",
+      "tool_name": "straight_mayo_dissecting",
+      "image_id": "image-79e9d05dc8704bb4"
+    },
+    {
+      "label": "rongeur",
+      "tool_name": "leksell",
+      "image_id": "image-0a912921f468b763"
+    }
+  ],
+  "review_required": true
+}

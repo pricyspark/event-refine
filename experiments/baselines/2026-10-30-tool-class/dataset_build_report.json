@@ -1,0 +1,111 @@
+{
+  "source": "/home/pricyspark/flowsis-data",
+  "seed": 42,
+  "requested_fractions": {
+    "train": 0.7,
+    "validation": 0.15,
+    "test": 0.15
+  },
+  "split_by": "sample",
+  "split_grouping": [
+    "Sample ID"
+  ],
+  "classes": [
+    "bonepunch",
+    "forceps",
+    "gouge",
+    "mallet",
+    "osteotome",
+    "pliers",
+    "retractor",
+    "rongeur",
+    "scissors"
+  ],
+  "label_fields": [
+    "tool_class"
+  ],
+  "split_policy": "training_class_coverage_first",
+  "empty_splits": [],
+  "classes_absent_from_train": [],
+  "skipped": {
+    "not_accepted": 70,
+    "missing_sample_id": 141
+  },
+  "mask_audit": {
+    "bundles": 883,
+    "masks": 888,
+    "multi_instance_bundles": 5,
+    "overlaps": []
+  },
+  "splits": {
+    "train": {
+      "images": 518,
+      "samples": 68,
+      "masks": 523,
+      "multi_tool_images": 5,
+      "background_images": 0,
+      "classes": {
+        "scissors": 189,
+        "pliers": 35,
+        "bonepunch": 7,
+        "mallet": 16,
+        "forceps": 106,
+        "retractor": 56,
+        "gouge": 40,
+        "osteotome": 72,
+        "rongeur": 2
+      },
+      "classes_absent": []
+    },
+    "validation": {
+      "images": 115,
+      "samples": 15,
+      "masks": 115,
+      "multi_tool_images": 0,
+      "background_images": 0,
+      "classes": {
+        "forceps": 44,
+        "bonepunch": 7,
+        "pliers": 8,
+        "retractor": 8,
+        "scissors": 24,
+        "gouge": 8,
+        "osteotome": 16
+      },
+      "classes_absent": [
+        "mallet",
+        "rongeur"
+      ]
+    },
+    "test": {
+      "images": 109,
+      "samples": 14,
+      "masks": 109,
+      "multi_tool_images": 0,
+      "background_images": 0,
+      "classes": {
+        "scissors": 32,
+        "forceps": 45,
+        "pliers": 8,
+        "gouge": 16,
+        "osteotome": 8
+      },
+      "classes_absent": [
+        "bonepunch",
+        "mallet",
+        "retractor",
+        "rongeur"
+      ]
+    }
+  },
+  "augmentation_recommendation": {
+    "rotation_degrees": [
+      0,
+      45
+    ],
+    "overlap_min_overlays": 0,
+    "overlap_max_overlays": 1,
+    "overlap_p": 0.25
+  },
+  "external_assets": "Paths are relative to the dataset directory; retain its layout relative to images and masks."
+}
