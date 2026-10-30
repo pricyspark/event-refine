@@ -3,6 +3,7 @@ import torch
 from types import SimpleNamespace
 
 from flowsis.cli.train.train_temporal import temporal_objective
+from flowsis.data.flow_cache import FrozenFlowCache
 from flowsis.temporal import (
     TemporalRefinementBranch,
     warp_backward,
@@ -145,7 +146,8 @@ def test_temporal_checkpoint_round_trip(tmp_path) -> None:
         torch.testing.assert_close(actual, expected)
 
 
-def test_recurrent_objective_backpropagates_through_time() -> None:
+@pytest.mark.parametrize("cache_flow", [False, True])
+def test_recurrent_objective_backpropagates_through_time(tmp_path, cache_flow) -> None:
     batch_size, length, tracks, queries = 1, 3, 1, 2
     branch = TemporalRefinementBranch(
         channels=(8,), feature_channels=3, context_channels=4, hidden_channels=5
@@ -180,9 +182,11 @@ def test_recurrent_objective_backpropagates_through_time() -> None:
         def forward(self, current, previous):
             return current.new_zeros((current.shape[0], 2, *current.shape[-2:]))
 
+    flow = ZeroFlow().requires_grad_(False).eval()
+    estimator = FrozenFlowCache(tmp_path, flow) if cache_flow else flow
     result = temporal_objective(
         branch,
-        ZeroFlow(),
+        estimator,
         torch.rand(batch_size, length, 3, 16, 16),
         base_output,
         batch,
