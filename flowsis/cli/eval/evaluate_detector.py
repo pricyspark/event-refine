@@ -10,8 +10,9 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
+from datasets import ClassLabel, Dataset, DatasetDict
 
+from flowsis.data.loaders import load_local_dataset
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 from flowsis.cli.common import add_detector_arguments
@@ -89,7 +90,7 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    loaded = load_from_disk(args.dataset_path)
+    loaded = load_local_dataset(args.dataset_path)
     if not isinstance(loaded, DatasetDict):
         raise TypeError("Expected --dataset-path to contain a DatasetDict.")
     if args.split not in loaded:

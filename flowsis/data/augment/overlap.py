@@ -76,7 +76,7 @@ def _verify_overlap_example(
         bbox = mask2xywh(visible_mask)
         assert bbox is not None
         obj["bbox"] = bbox
-        obj["area"] = bbox[2] * bbox[3]
+        obj["area"] = float(visible_area[i])
         obj["mask"] = visible_mask
         obj["visible_fraction"] = float(visible_ratios[i])
         obj["visible_pixels"] = int(visible_area[i])
@@ -124,6 +124,8 @@ def overlap_augment(
     min_overlay = kwargs.get("min_overlays", 0)
     max_overlay = kwargs.get("max_overlays", min_overlay)
     p = kwargs.get("p", 0.5)
+    if min_overlay < 0:
+        raise ValueError("min_overlays must be nonnegative.")
     if max_overlay < min_overlay:
         raise ValueError("max_overlays must be greater than or equal to min_overlays.")
     if not 0 <= p < 1:
@@ -131,6 +133,8 @@ def overlap_augment(
 
     num_additional_samples = min(rng.geometric(1 - p) - 1, max_overlay - min_overlay)
     num_samples = min_overlay + num_additional_samples
+    if num_samples == 0:
+        return example
 
     overlay_examples = context.sample_examples(num_samples, rng=rng)
     overlay_prepare = kwargs.get("overlay_prepare")

@@ -3,8 +3,9 @@ import math
 import random
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
+from datasets import ClassLabel, Dataset, DatasetDict
 
+from flowsis.data.loaders import load_local_dataset
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
@@ -37,7 +38,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_split(dataset_path: Path, split_name: str) -> tuple[Dataset, dict[int, str]]:
-    dataset = load_from_disk(str(dataset_path))
+    dataset = load_local_dataset(dataset_path)
     if not isinstance(dataset, DatasetDict):
         raise TypeError("Expected a dataset with named splits.")
     if split_name not in dataset:

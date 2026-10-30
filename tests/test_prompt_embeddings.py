@@ -3,9 +3,13 @@ from pathlib import Path
 
 import pytest
 import torch
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Value
 
 from flowsis.cli.data.author_text_prompts import existing_descriptions, prompt_draft
-from flowsis.cli.data.embed_text_prompts import select_prompt_types
+from flowsis.cli.data.embed_text_prompts import (
+    select_prompt_types,
+    taxonomy_from_dataset,
+)
 from flowsis.cli.data.generate_text_prompts import generate_descriptions
 from flowsis.data.prompts import (
     LabelPrompts,
@@ -140,6 +144,63 @@ def test_prompt_type_selection_supports_clean_ablations() -> None:
     }
 
 
+@pytest.mark.parametrize("label", ["scissors", "iris scissors", "scissors iris"])
+def test_prompt_taxonomy_uses_exported_labels(tmp_path: Path, label: str) -> None:
+    features = Features(
+        {
+            "objects": [
+                {
+                    "category": ClassLabel(names=[label]),
+                    "tool_name": Value("string"),
+                    "tool_class": Value("string"),
+                }
+            ]
+        }
+    )
+    split = Dataset.from_list(
+        [
+            {
+                "objects": [
+                    {"category": 0, "tool_name": "iris", "tool_class": "scissors"}
+                ]
+            },
+            {
+                "objects": [
+                    {"category": 0, "tool_name": "mayo", "tool_class": "scissors"}
+                ]
+            },
+        ],
+        features=features,
+    )
+    DatasetDict(train=split, validation=split).save_to_disk(tmp_path / "dataset")
+    assert taxonomy_from_dataset(tmp_path / "dataset") == {label: "scissors"}
+
+
+def test_prompt_taxonomy_rejects_different_split_label_order(tmp_path: Path) -> None:
+    splits = {}
+    for name, labels in (
+        ("train", ["scissors", "forceps"]),
+        ("validation", ["forceps", "scissors"]),
+    ):
+        features = Features(
+            {
+                "objects": [
+                    {
+                        "category": ClassLabel(names=labels),
+                        "tool_class": Value("string"),
+                    }
+                ]
+            }
+        )
+        splits[name] = Dataset.from_list(
+            [{"objects": [{"category": 0, "tool_class": labels[0]}]}],
+            features=features,
+        )
+    DatasetDict(splits).save_to_disk(tmp_path / "dataset")
+    with pytest.raises(ValueError, match="same ordered class labels"):
+        taxonomy_from_dataset(tmp_path / "dataset")
+
+
 def test_optional_generator_records_reproducibility_metadata() -> None:
     class Response:
         id = "response-test"
@@ -162,9 +223,7 @@ def test_optional_generator_records_reproducibility_metadata() -> None:
         {"iris scissors": "scissors"}, Responses(), model="requested-model"
     )
 
-    assert descriptions == {
-        "iris scissors": "iris scissors with short fine blades"
-    }
+    assert descriptions == {"iris scissors": "iris scissors with short fine blades"}
     assert provenance["requested_model"] == "requested-model"
     assert provenance["response_model"] == "test-model-snapshot"
     assert provenance["review_required"] is True

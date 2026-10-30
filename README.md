@@ -154,3 +154,39 @@ detector = load_detector("outputs/detectors/dfine/final")
 ```
 
 PTLFlow `0.4.2` requires Python `<3.14`, so the environment uses Python 3.13.
+
+
+### Temporary collected-data dataset
+
+Build the current reviewed still-image dataset in the adjacent `flowsis-data`
+repository with `python build_dataset.py` (requires `datasets`, NumPy, and Pillow).
+The builder and its documentation live there; the resulting dataset is at
+`../flowsis-data/data/segmentation-dataset`. Pass that path to the training CLI's
+`--dataset-path` option. Image and mask paths are stored relative to the dataset directory. Move the
+source repository as a unit to preserve the relative layout. Model training,
+evaluation, and visualization resolve these paths when opening the dataset.
+For Python callers, use `flowsis.data.loaders.load_local_dataset(path)` rather
+than opening these exports directly with `datasets.load_from_disk`. Each image
+retains all of its instances. `area` is foreground mask pixel count, including
+after augmentation. Explicitly reviewed empty images are supported by the data
+builder when an empty mask bundle verifies that no positive masks were saved.
+
+Collected single-tool views already cover 360 degrees. Training and augmentation
+previews now default to extra rotation from 0 to 45 degrees.
+`--rotation-min-degrees` and `--rotation-max-degrees` override that range (use
+`--rotation-max-degrees 360` for the original full-angle augmentation). Synthetic
+overlap remains enabled, with zero to one overlay and `--overlap-p 0.25`: a 25%
+chance of one additional image before visibility/severity filtering. An overlay
+image can itself contain multiple tools. Use `--no-use-overlap-augment` to disable
+it, or `--overlap-min-overlays 1 --overlap-max-overlays 1` for one overlay on every
+sample. Validation and test images are not augmented this way.
+
+The collected-data export uses image-level `tool_ids` and per-object `tool_id`;
+there is no singular image-level physical tool field. Object `instance_id`
+preserves the original annotation identifier (scoped to its source image). The
+mask loader adds runtime `source_image_id` so synthetic composites retain that
+provenance, and initializes image/object `modified` flags at runtime. These flags
+are not stored in new exports. Base-model training balances capture setups by
+Sample ID, assigning each sample equal total weight across its images. Images
+without a Sample ID are weighted individually. Detector-only training continues
+to use its existing image-shuffling policy.

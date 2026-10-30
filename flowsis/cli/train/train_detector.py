@@ -134,13 +134,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-overlap-augment",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="Apply overlap compositing during training.",
     )
     parser.add_argument(
         "--overlap-min-overlays",
         type=int,
-        default=1,
+        default=0,
         help="Minimum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
@@ -152,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overlap-p",
         type=float,
-        default=0.1,
+        default=0.25,
         help="Geometric continuation parameter used to sample additional overlap layers.",
     )
     parser.add_argument(
@@ -161,6 +161,8 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Apply photometric augmentation during training.",
     )
+    parser.add_argument("--rotation-min-degrees", type=float, default=0.0)
+    parser.add_argument("--rotation-max-degrees", type=float, default=45.0)
     return parser.parse_args()
 
 
@@ -279,7 +281,17 @@ def build_train_augmentation_steps(args: argparse.Namespace) -> list[Augmentatio
             )
         )
     if args.use_rotation_augment:
-        steps.append(("rotation_augment", rotation_augment, {"pad": 1}))
+        steps.append(
+            (
+                "rotation_augment",
+                rotation_augment,
+                {
+                    "pad": 1,
+                    "min_angle": args.rotation_min_degrees,
+                    "max_angle": args.rotation_max_degrees,
+                },
+            )
+        )
     if args.use_roi_square_augment:
         steps.append(
             ("roi_square_augment", roi_square_augment, {"crop_size": args.image_size})

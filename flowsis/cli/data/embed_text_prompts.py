@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from datasets import ClassLabel, DatasetDict, load_from_disk
 
-from flowsis.data import LabelPrompts, canonical_tool_label, validate_prompt_suite
+from flowsis.data import LabelPrompts, validate_prompt_suite
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 from flowsis.utils import get_device
 
@@ -41,19 +41,23 @@ def taxonomy_from_dataset(dataset_path: Path) -> dict[str, str]:
 
     coarse_by_name: defaultdict[str, set[str]] = defaultdict(set)
     for split in dataset.values():
+        split_schema = get_object_feature_schema(split.features["objects"])
+        split_category = getattr(
+            split_schema["category"], "feature", split_schema["category"]
+        )
+        if (
+            not isinstance(split_category, ClassLabel)
+            or split_category.names != category.names
+        ):
+            raise ValueError(
+                "All dataset splits must use the same ordered class labels."
+            )
         for example in split:
             for obj in get_object_records(example):
                 coarse = " ".join(str(obj.get("tool_class", "")).split())
                 label = category.int2str(int(obj["category"]))
-                expected = canonical_tool_label(
-                    str(obj.get("tool_name", "")), coarse, {}
-                )
-                if label != expected:
-                    raise ValueError(
-                        f"Arrow category {label!r} does not match Tool Name/Class "
-                        f"label {expected!r}. Rebuild the dataset with "
-                        "flowsis-build-annotated-dataset."
-                    )
+                # Exported categories are authoritative: label fields may be
+                # configured independently of the preserved tool metadata.
                 if coarse:
                     coarse_by_name[label].add(coarse)
 
@@ -122,9 +126,7 @@ def main() -> None:
         device=device,
     )
     validate_prompt_suite(label_prompts.prompts, taxonomy)
-    label_prompts.prompts = select_prompt_types(
-        label_prompts.prompts, args.prompt_type
-    )
+    label_prompts.prompts = select_prompt_types(label_prompts.prompts, args.prompt_type)
     embeddings = label_prompts.embed_all()
     label_prompts.save_embeddings(args.output_dir)
     for label, embedding in embeddings.items():

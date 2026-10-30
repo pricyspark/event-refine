@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import math
 import time
+from collections import Counter
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
@@ -152,9 +153,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-overlap-augment", action=argparse.BooleanOptionalAction, default=True
     )
-    parser.add_argument("--overlap-min-overlays", type=int, default=1)
+    parser.add_argument("--overlap-min-overlays", type=int, default=0)
     parser.add_argument("--overlap-max-overlays", type=int, default=1)
-    parser.add_argument("--overlap-p", type=float, default=0.5)
+    parser.add_argument("--overlap-p", type=float, default=0.25)
     parser.add_argument(
         "--use-rotation-augment", action=argparse.BooleanOptionalAction, default=True
     )
@@ -164,6 +165,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-photometric-augment", action=argparse.BooleanOptionalAction, default=True
     )
+    parser.add_argument("--rotation-min-degrees", type=float, default=0.0)
+    parser.add_argument("--rotation-max-degrees", type=float, default=45.0)
     return parser.parse_args()
 
 
@@ -222,7 +225,13 @@ def build_dataset(
         )
     if args.use_rotation_augment:
         augmentations.append(rotation_augment)
-        kwargs.append({"pad": 1})
+        kwargs.append(
+            {
+                "pad": 1,
+                "min_angle": args.rotation_min_degrees,
+                "max_angle": args.rotation_max_degrees,
+            }
+        )
     if args.use_roi_square_augment:
         augmentations.append(roi_square_augment)
         kwargs.append({"crop_size": args.image_size})
@@ -328,24 +337,15 @@ def build_dataloader(
     sampler = None
     base_dataset = getattr(dataset, "base_dataset", dataset)
     columns = set(getattr(base_dataset, "column_names", ()))
-    if training and {"physical_tool_id", "sample_id"} <= columns:
-        tool_ids = [str(value) for value in base_dataset["physical_tool_id"]]
-        sample_ids = [str(value) for value in base_dataset["sample_id"]]
-        samples_by_tool: dict[str, set[str]] = {}
-        images_by_sample: dict[tuple[str, str], int] = {}
-        for tool_id, sample_id in zip(tool_ids, sample_ids, strict=True):
-            sample = sample_id or "<ungrouped>"
-            samples_by_tool.setdefault(tool_id, set()).add(sample)
-            key = (tool_id, sample)
-            images_by_sample[key] = images_by_sample.get(key, 0) + 1
-        weights = [
-            1.0
-            / (
-                len(samples_by_tool[tool_id])
-                * images_by_sample[(tool_id, sample_id or "<ungrouped>")]
-            )
-            for tool_id, sample_id in zip(tool_ids, sample_ids, strict=True)
+    if training and "sample_id" in columns:
+        # Each capture setup receives equal total weight, regardless of how
+        # many views or tools it contains. Ungrouped images stand alone.
+        sample_keys = [
+            ("sample", str(value)) if value else ("image", str(index))
+            for index, value in enumerate(base_dataset["sample_id"])
         ]
+        images_per_sample = Counter(sample_keys)
+        weights = [1.0 / images_per_sample[key] for key in sample_keys]
         sampler = WeightedRandomSampler(
             weights,
             num_samples=len(weights),

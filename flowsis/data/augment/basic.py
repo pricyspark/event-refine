@@ -65,10 +65,10 @@ def _crop_example_helper(
                 )
             ).astype(bool)
             obj["mask"] = mask_resized
+            obj["area"] = float(np.count_nonzero(mask_resized))
             mask_bbox = mask2xywh(mask_resized)
             if mask_bbox is not None:
                 obj["bbox"] = mask_bbox
-                obj["area"] = float(mask_bbox[2] * mask_bbox[3])
 
     return example
 

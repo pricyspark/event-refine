@@ -303,7 +303,9 @@ def _still_replay_loader(
         return None
     if args.still_dataset_path is None:
         raise ValueError("Mask-head fine-tuning requires --still-dataset-path replay.")
-    data = load_from_disk(str(args.still_dataset_path))
+    from flowsis.data.loaders import load_local_dataset
+
+    data = load_local_dataset(args.still_dataset_path)
     if not isinstance(data, DatasetDict) or args.train_split not in data:
         raise ValueError(
             "Still replay data must be a DatasetDict with the train split."

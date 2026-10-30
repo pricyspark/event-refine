@@ -85,7 +85,7 @@ def test_temporal_splits_keep_shared_sessions_and_tools_together() -> None:
         {
             "video_id": video,
             "capture_session_id": session,
-            "objects": [{"physical_tool_id": tool}],
+            "objects": [{"tool_id": tool}],
         }
         for video, session, tool in (
             ("a", "one", "x"),

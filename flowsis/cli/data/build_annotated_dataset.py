@@ -101,9 +101,6 @@ def _group_assignments(
         values = [
             ("tool", str(value)) for value in row.get("tool_ids", []) if str(value)
         ]
-        physical_tool_id = str(row.get("physical_tool_id", ""))
-        if physical_tool_id:
-            values.append(("tool", physical_tool_id))
         session = str(row.get("capture_session_id", ""))
         if session:
             values.append(("session", session))
@@ -167,9 +164,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         if image is None:
             raise KeyError(f"Review log refers to unknown image {image_id!r}.")
         for obj in annotated:
-            if parse_bool(obj.get("Class Valid")) and parse_bool(
-                obj.get("Base Valid")
-            ):
+            if parse_bool(obj.get("Class Valid")) and parse_bool(obj.get("Base Valid")):
                 name, tool_class, _ = _image_object_identity(
                     image,
                     obj,
@@ -182,8 +177,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
             obj.get("Tool Name", ""), obj.get("Tool Class", ""), aliases
         )
         for obj in video_objects
-        if (obj.get("Video ID"), int(obj.get("Frame Index", -1)))
-        in reviewed_frames
+        if (obj.get("Video ID"), int(obj.get("Frame Index", -1))) in reviewed_frames
         and parse_bool(obj.get("Class Valid"))
         and parse_bool(obj.get("Base Valid"))
     )
@@ -218,7 +212,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         with Image.open(image_path) as loaded:
             width, height = loaded.size
         row_objects = []
-        for index, obj in enumerate(annotated):
+        for obj in annotated:
             if not parse_bool(obj.get("Mask Valid")):
                 continue
             name, tool_class, tool_id = _image_object_identity(
@@ -232,7 +226,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                 continue
             row_objects.append(
                 {
-                    "id": index,
+                    "instance_id": obj.get("Instance ID", ""),
                     "area": float(obj["BBox Width"]) * float(obj["BBox Height"]),
                     "bbox": [
                         float(obj["BBox X"]),
@@ -243,18 +237,15 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                     "category": label_by_name[label],
                     "tool_name": name,
                     "tool_class": tool_class,
-                    "physical_tool_id": tool_id,
+                    "tool_id": tool_id,
                     "mask_path": str(Path(obj["Mask Path"]).resolve()),
                     "mask_index": int(obj["Mask Index"]),
                     "annotation_confidence": float(
                         obj.get("Annotation Confidence", 1.0)
                     ),
-                    "modified": False,
                 }
             )
-        tool_ids = sorted(
-            {obj["physical_tool_id"] for obj in row_objects if obj["physical_tool_id"]}
-        )
+        tool_ids = sorted({obj["tool_id"] for obj in row_objects if obj["tool_id"]})
         rows.append(
             {
                 "image_path": str(image_path),
@@ -263,11 +254,9 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                 "image_id": image_id,
                 "height": height,
                 "width": width,
-                "physical_tool_id": image.get("Tool ID", ""),
                 "tool_ids": tool_ids,
                 "sample_id": image.get("Sample ID", ""),
                 "capture_session_id": image.get(CAPTURE_SESSION_FIELD, ""),
-                "modified": False,
                 "objects": row_objects,
             }
         )
@@ -307,7 +296,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         if not video_path.is_file():
             raise FileNotFoundError(f"Missing reviewed video {video_path}.")
         row_objects = []
-        for index, obj in enumerate(annotated):
+        for obj in annotated:
             if not parse_bool(obj.get("Mask Valid")):
                 continue
             name = normalize_tool_name(obj["Tool Name"], aliases)
@@ -317,7 +306,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                 continue
             row_objects.append(
                 {
-                    "id": index,
+                    "instance_id": obj.get("Track ID", ""),
                     "area": float(obj["BBox Width"]) * float(obj["BBox Height"]),
                     "bbox": [
                         float(obj["BBox X"]),
@@ -328,18 +317,15 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                     "category": label_by_name[label],
                     "tool_name": name,
                     "tool_class": tool_class,
-                    "physical_tool_id": obj.get("Tool ID", ""),
+                    "tool_id": obj.get("Tool ID", ""),
                     "mask_path": str(Path(obj["Mask Path"]).resolve()),
                     "mask_index": int(obj["Mask Index"]),
                     "annotation_confidence": float(
                         obj.get("Annotation Confidence", 1.0)
                     ),
-                    "modified": False,
                 }
             )
-        tool_ids = sorted(
-            {obj["physical_tool_id"] for obj in row_objects if obj["physical_tool_id"]}
-        )
+        tool_ids = sorted({obj["tool_id"] for obj in row_objects if obj["tool_id"]})
         rows.append(
             {
                 "image_path": "",
@@ -348,11 +334,9 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
                 "image_id": f"{video_id}:{frame_index}",
                 "height": int(video["Height"]),
                 "width": int(video["Width"]),
-                "physical_tool_id": tool_ids[0] if len(tool_ids) == 1 else "",
                 "tool_ids": tool_ids,
                 "sample_id": "",
                 "capture_session_id": video.get(CAPTURE_SESSION_FIELD, ""),
-                "modified": False,
                 "objects": row_objects,
             }
         )
@@ -373,24 +357,21 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
             "image_id": Value("string"),
             "height": Value("int64"),
             "width": Value("int64"),
-            "physical_tool_id": Value("string"),
             "tool_ids": Sequence(Value("string")),
             "sample_id": Value("string"),
             "capture_session_id": Value("string"),
-            "modified": Value("bool"),
             "objects": [
                 {
-                    "id": Value("int64"),
+                    "instance_id": Value("string"),
                     "area": Value("float32"),
                     "bbox": Sequence(Value("float32"), length=4),
                     "category": ClassLabel(names=names),
                     "tool_name": Value("string"),
                     "tool_class": Value("string"),
-                    "physical_tool_id": Value("string"),
+                    "tool_id": Value("string"),
                     "mask_path": Value("string"),
                     "mask_index": Value("int64"),
                     "annotation_confidence": Value("float32"),
-                    "modified": Value("bool"),
                 }
             ],
         }

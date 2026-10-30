@@ -98,13 +98,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-overlap-augment",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="Apply overlap compositing during training visualization.",
     )
     parser.add_argument(
         "--overlap-min-overlays",
         type=int,
-        default=1,
+        default=0,
         help="Minimum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
@@ -116,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overlap-p",
         type=float,
-        default=0.5,
+        default=0.25,
         help="Geometric continuation parameter used to sample additional overlap layers.",
     )
     parser.add_argument(
@@ -125,6 +125,8 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Apply photometric augmentation during training visualization.",
     )
+    parser.add_argument("--rotation-min-degrees", type=float, default=0.0)
+    parser.add_argument("--rotation-max-degrees", type=float, default=45.0)
     return parser.parse_args()
 
 

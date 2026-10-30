@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
+from datasets import Dataset, DatasetDict, load_dataset
 
 from flowsis.pretrained import DETECTOR_ARCHITECTURES
+from flowsis.data.loaders import load_local_dataset
 
 
 def add_detector_arguments(
@@ -47,7 +48,7 @@ def load_dataset_dict(
         path = Path(dataset_path)
         if not path.exists():
             raise FileNotFoundError(f"Dataset path does not exist: {path}")
-        loaded = load_from_disk(str(path))
+        loaded = load_local_dataset(path)
     if isinstance(loaded, Dataset):
         raise TypeError("Expected a DatasetDict, but loaded a single Dataset.")
     return loaded

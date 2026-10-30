@@ -18,14 +18,21 @@ def sample_rotation_angle(
     rng: np.random.Generator,
     crop_loss_avoidance: float = 0.5,
     max_tries: int = 100,
+    min_angle: float = 0.0,
+    max_angle: float = 45.0,
     **kwargs,
 ) -> tuple[float, int, int, float, float]:
     if not 0 <= crop_loss_avoidance <= 1:
         raise ValueError("crop_loss_avoidance must be in [0, 1].")
 
+    if not 0 <= min_angle <= max_angle <= 360:
+        raise ValueError(
+            "Rotation angles must satisfy 0 <= min_angle <= max_angle <= 360."
+        )
+
     old_area = width * height
     for _ in range(max_tries):
-        angle = rng.uniform(0.0, 360.0)
+        angle = rng.uniform(min_angle, max_angle)
 
         width_crop, height_crop, dx, dy = rotate_crop_bounds(
             width,
@@ -43,7 +50,7 @@ def sample_rotation_angle(
         if rng.random() < accept_prob:
             return angle, width_crop, height_crop, dx, dy
 
-    angle = rng.choice((0.0, 90.0, 180.0, 270.0))
+    angle = min_angle
     width_crop, height_crop, dx, dy = rotate_crop_bounds(
         width,
         height,
@@ -80,14 +87,17 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     offset = np.zeros(2, dtype=np.float64)
     if objects:
         m_union_img = Image.fromarray(mask_union(masks).astype(np.uint8, copy=False))
-        m_union_rot = np.asarray(
-            m_union_img.rotate(
-                angle,
-                resample=Image.Resampling.NEAREST,
-                expand=True,
-                fillcolor=0,
+        m_union_rot = (
+            np.asarray(
+                m_union_img.rotate(
+                    angle,
+                    resample=Image.Resampling.NEAREST,
+                    expand=True,
+                    fillcolor=0,
+                )
             )
-        ) != 0
+            != 0
+        )
         union_bbox = mask2xywh(m_union_rot)
         if union_bbox is not None:
             x, y, w, h = union_bbox
@@ -129,7 +139,7 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
         obj["mask"] = mask_crop
         obj["bbox"] = bbox
-        obj["area"] = bbox[2] * bbox[3]
+        obj["area"] = float(np.count_nonzero(mask_crop))
         obj["modified"] = True
 
         kept_objects.append(obj)
@@ -151,6 +161,12 @@ def rotate_crop_bounds(
     if theta >= math.pi / 2:
         theta = math.pi - theta
         reflect = True
+
+    if w == h:
+        side = w / (math.cos(theta) + math.sin(theta))
+        return side, side, 0.0, 0.0
+    if theta == 0:
+        return float(w), float(h), 0.0, 0.0
 
     aspect_ratio = w / h
     c = math.cos(theta)

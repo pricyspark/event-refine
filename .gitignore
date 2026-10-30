@@ -1,11 +1,23 @@
 .vscode/
 __pycache__
 *.egg*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-notes.txt
-pseudo.txt
+# Local scratch work
+/notes.txt
+/pseudo.txt
+/pseudo/
+/asdf.py
 
-# Data
+# Local datasets, annotation state, and generated working embeddings.
+# Curated prompts and dataset metadata belong in experiments/baselines/.
+/data/
+
+# Media, arrays, and checkpoint weights
 *.mp4
 *.jpg
 *.png
@@ -13,7 +25,9 @@ pseudo.txt
 *.npy
 *.npz
 *.pt
-data/**/*.json
+*.pth
+*.ckpt
+*.safetensors
 
 # Downloaded models
 flowsis/models/*
@@ -23,4 +37,14 @@ flowsis/models/*
 *.arrow
 
 # Generated outputs
-outputs/*
+/outputs/
+
+# Keep compact baseline records; large/redundant raw archives stay local.
+/experiments/baselines/*/source/
+/experiments/baselines/*/workspace_changes.patch
+/experiments/baselines/*/runs/
+
+# Deliberate exceptions: small frozen metadata exports and prompt tensors.
+# These contain neither source images/masks nor model weights.
+!/experiments/baselines/*/frozen_dataset/**/*.arrow
+!/experiments/baselines/*/prompts/*.pt

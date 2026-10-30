@@ -72,7 +72,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str
         grouped[key].append(
             {
                 "track_id": obj["Track ID"],
-                "physical_tool_id": obj.get("Tool ID", ""),
+                "tool_id": obj.get("Tool ID", ""),
                 "tool_class": obj.get("Tool Class", ""),
                 "tool_name": name,
                 "category": category[label],
@@ -158,10 +158,10 @@ def _split_videos(
         values = {
             ("session", str(video_rows[0]["capture_session_id"])),
             *{
-                ("tool", str(obj["physical_tool_id"]))
+                ("tool", str(obj["tool_id"]))
                 for row in video_rows
                 for obj in row["objects"]
-                if obj["physical_tool_id"]
+                if obj["tool_id"]
             },
         }
         for value in values:
@@ -219,7 +219,7 @@ def build_dataset(args: argparse.Namespace) -> DatasetDict:
             "objects": [
                 {
                     "track_id": Value("string"),
-                    "physical_tool_id": Value("string"),
+                    "tool_id": Value("string"),
                     "tool_class": Value("string"),
                     "tool_name": Value("string"),
                     "category": ClassLabel(names=names),
