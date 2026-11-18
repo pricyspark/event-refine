@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import math
 import time
-from collections import Counter
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
@@ -44,6 +43,7 @@ from flowsis.data.augment import (
     rotation_augment,
 )
 from flowsis.data.images import get_image
+from flowsis.data.sampling import frame_sampling_weights
 from flowsis.data.object_records import (
     get_object_feature_schema,
     get_object_records,
@@ -147,6 +147,17 @@ def parse_args() -> argparse.Namespace:
             "D-FINE box-distribution decoding can overflow in FP16."
         ),
     )
+    parser.add_argument(
+        "--video-fraction",
+        type=float,
+        default=0.5,
+        help="Expected video fraction of training draws when both sources exist (0..1).",
+    )
+    parser.add_argument(
+        "--samples-per-epoch",
+        type=int,
+        help="Training draws per epoch; defaults to the number of eligible rows.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device")
     parser.add_argument("--save-every-epochs", type=int, default=1)
@@ -165,8 +176,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-photometric-augment", action=argparse.BooleanOptionalAction, default=True
     )
-    parser.add_argument("--rotation-min-degrees", type=float, default=0.0)
-    parser.add_argument("--rotation-max-degrees", type=float, default=45.0)
+    parser.add_argument("--rotation-min-degrees", type=float, default=-22.5)
+    parser.add_argument("--rotation-max-degrees", type=float, default=22.5)
     return parser.parse_args()
 
 
@@ -337,18 +348,20 @@ def build_dataloader(
     sampler = None
     base_dataset = getattr(dataset, "base_dataset", dataset)
     columns = set(getattr(base_dataset, "column_names", ()))
-    if training and "sample_id" in columns:
-        # Each capture setup receives equal total weight, regardless of how
-        # many views or tools it contains. Ungrouped images stand alone.
-        sample_keys = [
-            ("sample", str(value)) if value else ("image", str(index))
-            for index, value in enumerate(base_dataset["sample_id"])
-        ]
-        images_per_sample = Counter(sample_keys)
-        weights = [1.0 / images_per_sample[key] for key in sample_keys]
+    if training and (
+        "sample_id" in columns
+        or "video_id" in columns
+        or getattr(args, "samples_per_epoch", None) is not None
+    ):
+        weights = frame_sampling_weights(
+            base_dataset, video_fraction=getattr(args, "video_fraction", 0.5)
+        )
+        draws = getattr(args, "samples_per_epoch", None)
+        if draws is not None and draws <= 0:
+            raise ValueError("--samples-per-epoch must be positive.")
         sampler = WeightedRandomSampler(
             weights,
-            num_samples=len(weights),
+            num_samples=draws if draws is not None else len(weights),
             replacement=True,
             generator=generator,
         )

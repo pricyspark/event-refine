@@ -46,7 +46,7 @@ def test_collected_data_cli_defaults(module, monkeypatch):
         argv += ["--text-embeddings-dir", "unused-in-parser-test"]
     monkeypatch.setattr(sys, "argv", argv)
     args = module.parse_args()
-    assert (args.rotation_min_degrees, args.rotation_max_degrees) == (0, 45)
+    assert (args.rotation_min_degrees, args.rotation_max_degrees) == (-22.5, 22.5)
     assert args.use_overlap_augment
     assert (args.overlap_min_overlays, args.overlap_max_overlays, args.overlap_p) == (
         0,
@@ -57,8 +57,9 @@ def test_collected_data_cli_defaults(module, monkeypatch):
 
 def test_sampled_angles_and_fallback_respect_range():
     rng = np.random.default_rng(42)
-    for _ in range(500):
-        assert 0 <= sample_rotation_angle(2160, 2160, rng)[0] <= 45
+    angles = [sample_rotation_angle(2160, 2160, rng)[0] for _ in range(500)]
+    assert all(-22.5 <= angle <= 22.5 for angle in angles)
+    assert min(angles) < 0 < max(angles)
     assert (
         sample_rotation_angle(16, 12, rng, min_angle=10, max_angle=20, max_tries=0)[0]
         == 10
@@ -71,7 +72,7 @@ def test_zero_and_45_degree_bounds_are_finite():
     assert rotate_crop_bounds(16, 12, 0) == (16, 12, 0, 0)
     bounds = rotate_crop_bounds(16, 16, np.pi / 4)
     assert bounds[:2] == pytest.approx((16 / np.sqrt(2),) * 2)
-    for angle in (0, 45):
+    for angle in (-22.5, 0, 22.5, 45):
         result = rotation_augment(example(), seed=42, min_angle=angle, max_angle=angle)
         assert len(result["objects"]) == 2
         assert not np.logical_and(*(obj["mask"] for obj in result["objects"])).any()

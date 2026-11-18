@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flowsis"
+name = "event-flow"
 version = "0.1.0"
-description = "FlowSIS training and inference code"
+description = "Event-Flow RGB and event temporal object detection research"
 readme = "README.md"
 requires-python = ">=3.10"
 

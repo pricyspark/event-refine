@@ -1,0 +1,57 @@
+{
+  "bonepunch": [
+    "bonepunch",
+    "This is a photo of bonepunch.",
+    "bonepunch with a long narrow shaft, a small biting tip with opposing cutting surfaces, and offset lever handles"
+  ],
+  "forceps": [
+    "forceps",
+    "This is a photo of forceps.",
+    "forceps with paired slender arms ending in opposing grasping jaws, with tweezer-like or hinged handles and straight or curved tips"
+  ],
+  "gouge": [
+    "gouge",
+    "This is a photo of gouge.",
+    "gouge with an elongated rigid shaft and a concave blade forming a lengthwise channel that ends in a curved cutting edge"
+  ],
+  "mallet": [
+    "mallet",
+    "This is a photo of mallet.",
+    "mallet with a thick head set across a slender shaft and an elongated handle"
+  ],
+  "needleholder": [
+    "needleholder",
+    "This is a photo of needleholder.",
+    "needleholder with short blunt opposing jaws on elongated shanks joined at a pivot, with finger-ring or spring handles"
+  ],
+  "osteotome": [
+    "osteotome",
+    "This is a photo of osteotome.",
+    "osteotome with an elongated rigid shaft and a flat chisel blade ending in a straight beveled cutting edge"
+  ],
+  "pliers": [
+    "pliers",
+    "This is a photo of pliers.",
+    "pliers with two handles joined at a pivot and short sturdy opposing jaws forming a compact gripping head"
+  ],
+  "retractor": [
+    "retractor",
+    "This is a photo of retractor.",
+    "retractor with elongated arms or a rigid shaft ending in curved hooks or broad angled blades"
+  ],
+  "rongeur": [
+    "rongeur",
+    "This is a photo of rongeur.",
+    "rongeur with sturdy lever handles and short opposing scoop-shaped jaws connected through one or more pivots"
+  ],
+  "scissors": [
+    "scissors",
+    "This is a photo of scissors.",
+    "scissors with two overlapping blades joined at a pivot and finger-ring handles, with straight, curved, or angled blade profiles"
+  ],
+  "tube": [
+    "tube",
+    "This is a photo of tube.",
+    "tube with an elongated hollow cylindrical body and an open end bordered by a circular rim"
+  ]
+}

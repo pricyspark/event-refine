@@ -130,7 +130,8 @@ def _preprocess_pixel_batch(
 
     original_shape = (int(batch.shape[-2]), int(batch.shape[-1]))
     resized_shape = _resize_shape(*original_shape, image_size)
-    pixels = batch.to(device, non_blocking=True).float()
+    # Rescaling/normalization below are in-place; never modify caller-owned frames.
+    pixels = batch.to(device=device, dtype=torch.float32, non_blocking=True, copy=True)
     if original_shape != resized_shape:
         pixels = F.interpolate(
             pixels,
@@ -179,7 +180,7 @@ def preprocess_detr_images(
     image_mean: torch.Tensor | None = None,
     image_std: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, list[dict[str, torch.Tensor]] | None]:
-    """Resize, normalize, and pad a DETR batch on its execution device."""
+    """Resize, normalize, and pad raw [0,255] RGB images without modifying inputs."""
     if isinstance(images, torch.Tensor):
         if images.ndim == 3:
             image_batches = [images.unsqueeze(0)]

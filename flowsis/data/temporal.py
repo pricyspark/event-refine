@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from PIL import Image
 from typing import Any
 
 import numpy as np
@@ -47,6 +48,8 @@ class DynamicClipBatchSampler(Sampler[list[ClipSpec]]):
         strides: Sequence[int] = (1, 2, 3),
         stride_weights: Sequence[float] = (0.7, 0.2, 0.1),
         positive_indices: Mapping[str, Sequence[int]] | None = None,
+        sequence_ids: Mapping[str, Mapping[int, str]] | None = None,
+        evaluation: bool = False,
         seed: int = 42,
     ) -> None:
         if batch_size <= 0 or batches_per_epoch <= 0:
@@ -65,16 +68,30 @@ class DynamicClipBatchSampler(Sampler[list[ClipSpec]]):
         }
         self.positive_indices = {
             video_id: frozenset(int(index) for index in indices)
-            for video_id, indices in (positive_indices or frame_indices).items()
+            for video_id, indices in (
+                frame_indices if positive_indices is None else positive_indices
+            ).items()
         }
+        self.sequence_ids = sequence_ids or {}
         self.batch_size = batch_size
         self.batches_per_epoch = batches_per_epoch
         self.min_length = min_length
         self.max_length = max_length
         self.strides = tuple(int(value) for value in strides)
         self.stride_weights = tuple(float(value) for value in stride_weights)
+        self.evaluation = evaluation
         self.seed = seed
         self.epoch = 0
+        self.geometries = [
+            (length, stride, weight, eligible)
+            for length in range(self.min_length, self.max_length + 1)
+            for stride, weight in zip(self.strides, self.stride_weights, strict=True)
+            if weight > 0 and (eligible := self._eligible(length, stride))
+        ]
+        if not self.geometries:
+            raise ValueError(
+                "No video interval has enough reviewed frames and a visible mask for a configured clip."
+            )
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -89,7 +106,16 @@ class DynamicClipBatchSampler(Sampler[list[ClipSpec]]):
             starts = [
                 index
                 for index in sorted(indices)
-                if all(index + offset in indices for offset in offsets)
+                if all(
+                    value in indices for value in range(index, index + offsets[-1] + 1)
+                )
+                and len(
+                    {
+                        self.sequence_ids.get(video_id, {}).get(value, video_id)
+                        for value in range(index, index + offsets[-1] + 1)
+                    }
+                )
+                == 1
                 and any(
                     index + offset in self.positive_indices.get(video_id, ())
                     for offset in offsets
@@ -101,17 +127,32 @@ class DynamicClipBatchSampler(Sampler[list[ClipSpec]]):
 
     def __iter__(self) -> Iterator[list[ClipSpec]]:
         generator = random.Random(self.seed + self.epoch)
-        for _ in range(self.batches_per_epoch):
-            for _attempt in range(100):
-                length = generator.randint(self.min_length, self.max_length)
-                stride = generator.choices(self.strides, self.stride_weights, k=1)[0]
-                eligible = self._eligible(length, stride)
-                if eligible:
-                    break
-            else:
-                raise ValueError(
-                    "No video has enough reviewed frames for a configured clip."
-                )
+        for batch_index in range(self.batches_per_epoch):
+            if self.evaluation:
+                length, stride, _weight, eligible = self.geometries[
+                    batch_index % len(self.geometries)
+                ]
+                video_ids = tuple(sorted(eligible))
+                video_position = batch_index % len(video_ids)
+                video_id = video_ids[video_position]
+                starts = eligible[video_id]
+                draws = (
+                    (self.batches_per_epoch - 1 - video_position) // len(video_ids) + 1
+                ) * self.batch_size
+                offset = (batch_index // len(video_ids)) * self.batch_size
+                yield [
+                    ClipSpec(
+                        video_id,
+                        starts[(offset + index) * len(starts) // draws],
+                        length,
+                        stride,
+                    )
+                    for index in range(self.batch_size)
+                ]
+                continue
+            length, stride, _weight, eligible = generator.choices(
+                self.geometries, weights=[item[2] for item in self.geometries], k=1
+            )[0]
             video_ids = tuple(eligible)
             yield [
                 ClipSpec(
@@ -188,6 +229,7 @@ class TemporalClipDataset(Dataset[dict[str, Any]]):
         self.rows: dict[tuple[str, int], Mapping[str, Any]] = {}
         self.video_paths: dict[str, Path] = {}
         self.frame_indices: dict[str, list[int]] = defaultdict(list)
+        self.sequence_ids: dict[str, dict[int, str]] = defaultdict(dict)
         self.positive_indices: dict[str, list[int]] = defaultdict(list)
         for row in rows:
             video_id = str(row["video_id"])
@@ -201,7 +243,10 @@ class TemporalClipDataset(Dataset[dict[str, Any]]):
                 raise ValueError(f"Video {video_id} maps to multiple paths.")
             self.rows[key] = row
             self.frame_indices[video_id].append(frame_index)
-            if row.get("objects", []):
+            self.sequence_ids[video_id][frame_index] = str(
+                row.get("sequence_id") or video_id
+            )
+            if any(obj.get("mask_valid", True) for obj in row.get("objects", [])):
                 self.positive_indices[video_id].append(frame_index)
         if not self.rows:
             raise ValueError("Temporal dataset contains no reviewed frame rows.")
@@ -212,7 +257,24 @@ class TemporalClipDataset(Dataset[dict[str, Any]]):
     def __getitem__(self, spec: ClipSpec) -> dict[str, Any]:  # type: ignore[override]
         indices = spec.frame_indices
         rows = [self.rows[(spec.video_id, index)] for index in indices]
-        raw_frames = self.frame_loader(self.video_paths[spec.video_id], indices)
+        if len(
+            {
+                self.sequence_ids[spec.video_id][index]
+                for index in range(indices[0], indices[-1] + 1)
+                if index in self.sequence_ids[spec.video_id]
+            }
+        ) != 1 or any(
+            (spec.video_id, index) not in self.rows
+            for index in range(indices[0], indices[-1] + 1)
+        ):
+            raise ValueError("Clip crosses an interval boundary or missing frame.")
+        if all(row.get("image_path") for row in rows):
+            raw_frames = []
+            for row in rows:
+                with Image.open(str(row["image_path"])) as image:
+                    raw_frames.append(np.array(image.convert("RGB")))
+        else:
+            raw_frames = self.frame_loader(self.video_paths[spec.video_id], indices)
         if len(raw_frames) != spec.length:
             raise RuntimeError("Frame loader returned the wrong number of frames.")
         height, width = raw_frames[0].shape[:2]
@@ -320,6 +382,15 @@ class TemporalClipDataset(Dataset[dict[str, Any]]):
             "track_ids": track_ids,
             "video_id": spec.video_id,
             "frame_indices": torch.tensor(indices, dtype=torch.long),
+            "timestamp_seconds": torch.tensor(
+                [
+                    float(
+                        row.get("timestamp_seconds", index / float(row.get("fps") or 1))
+                    )
+                    for row, index in zip(rows, indices, strict=True)
+                ],
+                dtype=torch.float64,
+            ),
             "frame_delta": torch.full((spec.length,), spec.stride, dtype=torch.long),
         }
 
@@ -359,6 +430,7 @@ def collate_temporal_clips(batch: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         "ignore": torch.stack([item["ignore"] for item in batch]),
         "frame_indices": torch.stack([item["frame_indices"] for item in batch]),
         "frame_delta": torch.stack([item["frame_delta"] for item in batch]),
+        "timestamp_seconds": torch.stack([item["timestamp_seconds"] for item in batch]),
         "track_ids": [item["track_ids"] for item in batch],
         "video_id": [item["video_id"] for item in batch],
     }

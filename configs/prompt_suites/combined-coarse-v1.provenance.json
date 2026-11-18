@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "method": "codex_assisted_draft",
+  "instructions_source": "flowsis/cli/data/generate_text_prompts.py:INSTRUCTIONS",
+  "instructions": "You write visual descriptions for surgical-instrument recognition.\n\nFor each supplied canonical label, produce one concise noun phrase that:\n- starts with the exact canonical label;\n- adds stable, visible features that distinguish it from the other supplied labels;\n- prioritizes shape, shaft, jaws, blades, tips, teeth, serrations, handles,\n  fenestrations, and other geometry visible in a photograph;\n- describes only appearance, not use, procedure, anatomy, scene, hands, tissue,\n  blood, labels, masks, or embeddings;\n- does not add generic features merely to make the phrase longer;\n- does not invent a feature when the label does not imply one.\n\nConsider the complete taxonomy together. Return exactly one entry for every label.\n",
+  "dataset_path": "../flowsis-data/exports/combined-sections-coarse",
+  "taxonomy": {
+    "bonepunch": "bonepunch",
+    "forceps": "forceps",
+    "gouge": "gouge",
+    "mallet": "mallet",
+    "needleholder": "needleholder",
+    "osteotome": "osteotome",
+    "pliers": "pliers",
+    "retractor": "retractor",
+    "rongeur": "rongeur",
+    "scissors": "scissors",
+    "tube": "tube"
+  },
+  "review_required": true,
+  "notes": "Descriptions drafted with Codex assistance using the repository LLM prompt. No external API generation or image-based review was performed."
+}

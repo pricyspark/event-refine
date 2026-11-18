@@ -25,6 +25,7 @@ class TemporalFramePrediction:
     masks_by_track: dict[int, torch.Tensor]
     selected: SelectionResult | None
     tracks: tuple[Track, ...]
+    used_base_fallback: bool = False
 
     @property
     def selected_mask(self) -> torch.Tensor | None:
@@ -50,6 +51,8 @@ class FlowSISTemporal:
         *,
         tracker: SelectionTracker | None = None,
         selector: TrackSelector | None = None,
+        base_fallback: bool = False,
+        skip_initial_refinement: bool = False,
     ) -> None:
         if temporal.feature_channels != base.head.mask_dim:
             raise ValueError(
@@ -60,6 +63,8 @@ class FlowSISTemporal:
         self.temporal = temporal.eval()
         self.tracker = tracker or SelectionTracker()
         self.selector = selector or TrackSelector()
+        self.base_fallback = base_fallback
+        self.skip_initial_refinement = skip_initial_refinement
         self.previous_frame: torch.Tensor | None = None
         self.previous_features: torch.Tensor | None = None
         self.states: dict[int, _RecurrentTrackState] = {}
@@ -152,11 +157,12 @@ class FlowSISTemporal:
                 else output.mask_logits.new_zeros((1, 1, height, width))
             )
             previous = self.states.get(track.track_id)
-            if (
-                previous is None
-                or self.previous_frame is None
-                or self.previous_features is None
-            ):
+            has_history = (
+                previous is not None
+                and self.previous_frame is not None
+                and self.previous_features is not None
+            )
+            if not has_history:
                 previous_logits = current_logits
                 previous_hidden = current_logits.new_zeros(
                     (1, self.temporal.hidden_channels, height, width)
@@ -165,31 +171,42 @@ class FlowSISTemporal:
                 previous_features = output.pixel_features
                 track_flow = zero_flow
             else:
+                assert (
+                    previous is not None
+                    and self.previous_frame is not None
+                    and self.previous_features is not None
+                )
                 previous_logits = previous.logits
                 previous_hidden = previous.hidden
                 previous_frame = self.previous_frame
                 previous_features = self.previous_features
                 assert backward_flow is not None
                 track_flow = backward_flow
-            refined = self.temporal(
-                frame,
-                previous_frame,
-                current_logits,
-                previous_logits,
-                track_flow,
-                current_features=output.pixel_features,
-                previous_features=previous_features,
-                previous_hidden=previous_hidden,
-                observation_valid=current_logits.new_tensor([float(observed)]),
-                observation_score=current_logits.new_tensor([track.score]),
-                class_agreement=current_logits.new_tensor([track.class_stability]),
-            )
-            assert refined.hidden_state is not None
+            if self.skip_initial_refinement and not has_history:
+                final_logits = current_logits
+                hidden = previous_hidden
+            else:
+                refined = self.temporal(
+                    frame,
+                    previous_frame,
+                    current_logits,
+                    previous_logits,
+                    track_flow,
+                    current_features=output.pixel_features,
+                    previous_features=previous_features,
+                    previous_hidden=previous_hidden,
+                    observation_valid=current_logits.new_tensor([float(observed)]),
+                    observation_score=current_logits.new_tensor([track.score]),
+                    class_agreement=current_logits.new_tensor([track.class_stability]),
+                )
+                assert refined.hidden_state is not None
+                final_logits = refined.final_logits
+                hidden = refined.hidden_state
             self.states[track.track_id] = _RecurrentTrackState(
-                refined.final_logits.detach(), refined.hidden_state.detach()
+                final_logits.detach(), hidden.detach()
             )
             logits = F.interpolate(
-                refined.final_logits,
+                final_logits,
                 size=bgr_frame.shape[:2],
                 mode="bilinear",
                 align_corners=False,
@@ -201,8 +218,45 @@ class FlowSISTemporal:
         self.previous_frame = frame
         self.previous_features = output.pixel_features
         selected = self.selector.select(tracks)
+        used_fallback = False
+        if selected is None and self.base_fallback and accepted.numel():
+            order = torch.argsort(scores[0, accepted], descending=True)
+            query = int(accepted[order[0]])
+            track = next(
+                (
+                    t
+                    for t in tracks
+                    if t.misses == 0 and t.last_detection_index == query
+                ),
+                None,
+            )
+            if track is not None:
+                # Return the strongest raw base mask without confirming/promoting
+                # the tentative track or changing the selector's internal state.
+                logits = F.interpolate(
+                    output.mask_logits[:, query : query + 1],
+                    size=bgr_frame.shape[:2],
+                    mode="bilinear",
+                    align_corners=False,
+                )[0, 0]
+                logits_by_track[track.track_id] = logits
+                masks_by_track[track.track_id] = (
+                    logits.sigmoid() >= self.base.mask_threshold
+                )
+                selected = SelectionResult(
+                    index=query,
+                    box=track.box,
+                    score=float(scores[0, query]),
+                    label=int(labels[0, query]),
+                    selection_score=float(scores[0, query]),
+                    track_length=track.age,
+                    matched_frames=track.hits,
+                    score_breakdown={"provisional_base": 1.0},
+                    track_id=track.track_id,
+                )
+                used_fallback = True
         return TemporalFramePrediction(
-            logits_by_track, masks_by_track, selected, tuple(tracks)
+            logits_by_track, masks_by_track, selected, tuple(tracks), used_fallback
         )
 
 

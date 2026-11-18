@@ -1,0 +1,8 @@
+{
+  "source_repository": "git@github.com:pricyspark/flowsis.git",
+  "source_branch": "end-to-end",
+  "source_commit": "05ab1128dec95439c1551db15c24abfe15aad179",
+  "includes_uncommitted_working_changes": true,
+  "snapshot_method": "Preserved Git history and copied tracked/non-ignored working files; ignored local assets excluded unless tracked.",
+  "assistance": "Codex"
+}

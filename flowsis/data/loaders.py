@@ -82,7 +82,7 @@ def load_local_dataset(path: str | Path) -> Dataset | DatasetDict:
         raise ValueError(f"Unsupported asset path contract: {contract}")
 
     def resolve_paths(example: dict[str, Any]) -> dict[str, Any]:
-        for field in ("image_path", "video_path"):
+        for field in ("image_path", "video_path", "mask_bundle_path"):
             if example.get(field):
                 example[field] = str((root / example[field]).resolve())
         for obj in example.get("objects", []):
@@ -92,4 +92,24 @@ def load_local_dataset(path: str | Path) -> Dataset | DatasetDict:
 
     return loaded.map(
         resolve_paths, keep_in_memory=True, desc="Resolving local asset paths"
+    )
+
+
+def base_dataset_view(dataset: Dataset) -> Dataset:
+    """Select base-valid rows while retaining the complete shared class vocabulary."""
+    if "base_eligible" not in dataset.column_names:
+        return dataset
+    return dataset.select(
+        [index for index, valid in enumerate(dataset["base_eligible"]) if valid]
+    )
+
+
+def temporal_dataset_view(dataset: Dataset) -> Dataset:
+    """Select video rows without changing split assignments or class ordering."""
+    if "video_id" not in dataset.column_names:
+        raise ValueError(
+            "Temporal data requires video_id; rebuild with video frames enabled."
+        )
+    return dataset.select(
+        [index for index, video in enumerate(dataset["video_id"]) if video]
     )

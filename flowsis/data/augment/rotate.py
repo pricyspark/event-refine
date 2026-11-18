@@ -18,16 +18,16 @@ def sample_rotation_angle(
     rng: np.random.Generator,
     crop_loss_avoidance: float = 0.5,
     max_tries: int = 100,
-    min_angle: float = 0.0,
-    max_angle: float = 45.0,
+    min_angle: float = -22.5,
+    max_angle: float = 22.5,
     **kwargs,
 ) -> tuple[float, int, int, float, float]:
     if not 0 <= crop_loss_avoidance <= 1:
         raise ValueError("crop_loss_avoidance must be in [0, 1].")
 
-    if not 0 <= min_angle <= max_angle <= 360:
+    if not -360 <= min_angle <= max_angle <= 360:
         raise ValueError(
-            "Rotation angles must satisfy 0 <= min_angle <= max_angle <= 360."
+            "Rotation angles must satisfy -360 <= min_angle <= max_angle <= 360."
         )
 
     old_area = width * height

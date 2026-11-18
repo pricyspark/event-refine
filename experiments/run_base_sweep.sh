@@ -39,6 +39,12 @@ common=(
   --scheduler-type constant_with_warmup
   --amp
   --no-detector-amp
+  --rotation-min-degrees -22.5
+  --rotation-max-degrees 22.5
+  --use-overlap-augment
+  --overlap-min-overlays 0
+  --overlap-max-overlays 1
+  --overlap-p 0.25
 )
 extra=("$@")
 

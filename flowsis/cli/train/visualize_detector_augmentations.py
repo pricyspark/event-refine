@@ -125,8 +125,8 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Apply photometric augmentation during training visualization.",
     )
-    parser.add_argument("--rotation-min-degrees", type=float, default=0.0)
-    parser.add_argument("--rotation-max-degrees", type=float, default=45.0)
+    parser.add_argument("--rotation-min-degrees", type=float, default=-22.5)
+    parser.add_argument("--rotation-max-degrees", type=float, default=22.5)
     return parser.parse_args()
 
 

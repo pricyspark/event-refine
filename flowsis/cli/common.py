@@ -55,10 +55,15 @@ def load_dataset_dict(
 
 
 def dataset_from_args(args: argparse.Namespace) -> DatasetDict:
-    return load_dataset_dict(
+    loaded = load_dataset_dict(
         args.dataset_path,
         dataset_name=getattr(args, "dataset_name", None),
         dataset_config=getattr(args, "dataset_config", None),
+    )
+    from flowsis.data.loaders import base_dataset_view
+
+    return DatasetDict(
+        {name: base_dataset_view(split) for name, split in loaded.items()}
     )
 
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from itertools import cycle
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
-from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
+from datasets import ClassLabel, Dataset, DatasetDict
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
@@ -19,6 +20,11 @@ from flowsis.base import FlowSISBase
 from flowsis.base_checkpoint import load_base, save_base_checkpoint
 from flowsis.cli.train import train_base
 from flowsis.data.object_records import get_object_feature_schema
+from flowsis.data.loaders import (
+    load_local_dataset,
+    base_dataset_view,
+    temporal_dataset_view,
+)
 from flowsis.data.temporal import (
     DynamicClipBatchSampler,
     TemporalClipDataset,
@@ -55,9 +61,12 @@ def build_loader(
     training: bool,
 ) -> tuple[DataLoader, DynamicClipBatchSampler]:
     dataset = TemporalClipDataset(
-        split,
+        temporal_dataset_view(split),
         image_size=args.image_size,
         training=training,
+    )
+    validation_length = (
+        getattr(args, "validation_clip_length", None) or args.max_clip_length
     )
     sampler = DynamicClipBatchSampler(
         dataset.frame_indices,
@@ -67,11 +76,13 @@ def build_loader(
             if training
             else min(args.validation_batches, args.batches_per_epoch)
         ),
-        min_length=args.min_clip_length if training else args.max_clip_length,
-        max_length=args.max_clip_length,
+        min_length=args.min_clip_length if training else validation_length,
+        max_length=args.max_clip_length if training else validation_length,
         strides=args.strides if training else (1,),
         stride_weights=args.stride_weights if training else (1.0,),
         positive_indices=dataset.positive_indices,
+        sequence_ids=dataset.sequence_ids,
+        evaluation=not training,
         seed=args.seed + (0 if training else 10_000),
     )
     return (
@@ -94,8 +105,12 @@ def _base_sequence(
     train_head: bool,
 ) -> Any:
     batch_size, length = frames.shape[:2]
-    raw_frames = [frame for frame in frames.flatten(0, 1)]
-    inputs = base.detector.preprocess(raw_frames, device_preprocess=True)
+    # Clips/flow use RGB floats in [0,1]; the detector expects raw [0,255] pixels.
+    # Allocate a separate uint8 batch so preprocessing cannot alter flow inputs.
+    detector_frames = (
+        frames.flatten(0, 1).mul(255.0).round().clamp_(0, 255).to(torch.uint8)
+    )
+    inputs = base.detector.preprocess(detector_frames, device_preprocess=True)
     pixels = cast(torch.Tensor, inputs["pixel_values"]).to(base.device)
     pixel_mask = inputs.get("pixel_mask")
     pixel_mask = (
@@ -302,15 +317,15 @@ def _still_replay_loader(
     if not args.finetune_mask_head:
         return None
     if args.still_dataset_path is None:
-        raise ValueError("Mask-head fine-tuning requires --still-dataset-path replay.")
-    from flowsis.data.loaders import load_local_dataset
-
+        raise ValueError(
+            "Mask-head fine-tuning requires --still-dataset-path replay (the combined dataset is supported)."
+        )
     data = load_local_dataset(args.still_dataset_path)
     if not isinstance(data, DatasetDict) or args.train_split not in data:
         raise ValueError(
             "Still replay data must be a DatasetDict with the train split."
         )
-    split = cast(Dataset, data[args.train_split])
+    split = base_dataset_view(cast(Dataset, data[args.train_split]))
     if _label_names(split) != base.label_names:
         raise ValueError("Still replay and base model class orders differ.")
     replay_args = SimpleNamespace(
@@ -351,6 +366,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-batches", type=int, default=100)
     parser.add_argument("--min-clip-length", type=int, default=4)
     parser.add_argument("--max-clip-length", type=int, default=8)
+    parser.add_argument(
+        "--validation-clip-length",
+        type=int,
+        help="Fixed validation length independent of training maximum; defaults to maximum clip length.",
+    )
     parser.add_argument("--strides", type=int, nargs="+", default=(1, 2, 3))
     parser.add_argument(
         "--stride-weights", type=float, nargs="+", default=(0.7, 0.2, 0.1)
@@ -371,27 +391,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.validation_clip_length is not None and args.validation_clip_length < 2:
+        parser.error("--validation-clip-length must be at least 2.")
+    return args
 
 
-def _mean(metrics: list[Mapping[str, torch.Tensor]]) -> dict[str, float]:
-    return (
-        {
-            key: sum(float(item[key]) for item in metrics) / max(len(metrics), 1)
-            for key in metrics[0]
-        }
-        if metrics
-        else {}
-    )
+def _metric_values(metrics: Mapping[str, torch.Tensor]) -> dict[str, float]:
+    """Keep logging history on CPU without retaining optimization graphs."""
+    keys = list(metrics)
+    values = torch.stack([metrics[key].detach() for key in keys]).cpu().tolist()
+    return dict(zip(keys, values, strict=True))
+
+
+def _mean(metrics: Sequence[Mapping[str, float]]) -> dict[str, float]:
+    if not metrics:
+        return {}
+    return {
+        key: sum(item[key] for item in metrics) / len(metrics) for key in metrics[0]
+    }
 
 
 def main() -> None:
     args = parse_args()
+    if args.validation_clip_length is not None and args.validation_clip_length < 2:
+        raise ValueError("Validation clip length must be >= 2.")
     if len(args.strides) != len(args.stride_weights):
         raise ValueError("--strides and --stride-weights must align.")
     set_seed(args.seed)
     device = torch.device(args.device) if args.device else get_device()
-    data = load_from_disk(str(args.dataset_path))
+    data = load_local_dataset(args.dataset_path)
     if not isinstance(data, DatasetDict):
         raise TypeError("Temporal data must be a DatasetDict.")
     train_split = cast(Dataset, data[args.train_split])
@@ -484,34 +513,48 @@ def main() -> None:
                 torch.nn.utils.clip_grad_norm_(trainable_parameters, args.gradient_clip)
                 scaler.step(optimizer)
                 scaler.update()
-            train_metrics.append(result)
+            train_metrics.append(_metric_values(result))
 
         validation_sampler.set_epoch(0)
         temporal.eval()
         validation_metrics = []
+        per_video_metrics = defaultdict(list)
         with torch.no_grad():
             for batch in validation_loader:
                 frames = batch["frames"].to(device)
                 with build_autocast_context(enabled=args.amp, device=device):
                     output = _base_sequence(base, frames, train_head=False)
-                    validation_metrics.append(
-                        temporal_objective(
-                            temporal,
-                            flow,
-                            frames,
-                            output,
-                            batch,
-                            visibility_weight=args.visibility_loss_weight,
-                            preferred_track_weight=1.0,
-                            use_annotation_confidence=True,
-                        )
+                    result = temporal_objective(
+                        temporal,
+                        flow,
+                        frames,
+                        output,
+                        batch,
+                        visibility_weight=args.visibility_loss_weight,
+                        preferred_track_weight=1.0,
+                        use_annotation_confidence=True,
                     )
+                    metric_values = _metric_values(result)
+                    validation_metrics.append(metric_values)
+                    # Evaluation batches contain clips from one video.
+                    per_video_metrics[batch["video_id"][0]].append(metric_values)
         train_mean = _mean(train_metrics)
         validation_mean = _mean(validation_metrics)
-        print({"epoch": epoch + 1, "train": train_mean, "validation": validation_mean})
+        per_video_mean = {
+            video_id: _mean(values) for video_id, values in per_video_metrics.items()
+        }
+        print(
+            {
+                "epoch": epoch + 1,
+                "train": train_mean,
+                "validation": validation_mean,
+                "validation_per_video": per_video_mean,
+            }
+        )
         checkpoint = {
             "format_version": TEMPORAL_CHECKPOINT_VERSION,
             "architecture": "residual_temporal_refiner",
+            "training_preprocessing": "unit_rgb_to_uint8_detector_v1",
             "state_dict": temporal.state_dict(),
             "config": {
                 "channels": temporal.channels,
@@ -522,6 +565,7 @@ def main() -> None:
             },
             "epoch": epoch + 1,
             "validation": validation_mean,
+            "validation_per_video": per_video_mean,
         }
         atomic_torch_save(checkpoint, args.output_dir / TEMPORAL_CHECKPOINT_FILE)
         if validation_mean.get("loss", math.inf) < best:
