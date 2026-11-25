@@ -1,0 +1,116 @@
+{
+  "format_version": 1,
+  "repo_id": "GabrieleMagrini/FRED",
+  "revision": "980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd",
+  "videos": [
+    {
+      "archive": "train/0.zip",
+      "size_bytes": 450817254,
+      "sha256": "2eabdec62d6d1d6f5c32614af7276db84361006a61cd818120fd9f5da36c3555",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/1.zip",
+      "size_bytes": 452754302,
+      "sha256": "df224382bbe4419f80682297e89ad468c4979f93bb37677e4cdb4ef75ab6c718",
+      "split": "validation",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/2.zip",
+      "size_bytes": 427975641,
+      "sha256": "cffee8b73de72fd94577b35a50d1bf906c32d28a353bdd1ed876aca1c9ffbaa0",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/3.zip",
+      "size_bytes": 550248109,
+      "sha256": "ec13115e30527c51ce49839445db5272ff63932947e59965b4b8c720367fd74e",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/4.zip",
+      "size_bytes": 537369933,
+      "sha256": "800480151af6953b7510cd4ccc564209c99334d537ee8413c0532520b701fe3d",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/5.zip",
+      "size_bytes": 468375923,
+      "sha256": "fd7ff0a06a53b537134166e877505bdb8e4d10f7ec1fd8aedf858f5ee1749a87",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/6.zip",
+      "size_bytes": 441381185,
+      "sha256": "90f5e2edda7f81a5853d0a824b2c14fea8c29ad8a1b30941c5b493f289981fb1",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/7.zip",
+      "size_bytes": 576374638,
+      "sha256": "2bd7563617a9d49fecba5ed36df5f93f7269f0002a7f0c0a7ff45bcc20b4bf7c",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/10.zip",
+      "size_bytes": 413987404,
+      "sha256": "b56ccebb2f438689670c3c5596002ec6fe9c66ea8936423341f1b447d310f9b4",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    },
+    {
+      "archive": "train/11.zip",
+      "size_bytes": 527131605,
+      "sha256": "1867200fb86117293da5e213fb9ec69503ce4b17bbc908fd7cd32f8fbea95658",
+      "split": "train",
+      "frame_start": 0,
+      "frame_stop": null
+    }
+  ],
+  "preprocess": {
+    "event_background": [
+      30,
+      37,
+      52
+    ],
+    "event_palette": [
+      [
+        30,
+        37,
+        52
+      ],
+      [
+        64,
+        126,
+        200
+      ],
+      [
+        255,
+        255,
+        255
+      ]
+    ],
+    "boxes": "extended",
+    "clip_boxes": true,
+    "class_mapping": "single-drone",
+    "timestamp_source": "event_filename_us",
+    "missing_annotations": "unlabeled"
+  }
+}

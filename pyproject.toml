@@ -8,14 +8,27 @@ version = "0.1.0"
 description = "Event-Flow RGB and event temporal object detection research"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pillow>=10",
+  "torch>=2.6",
+  "torchvision>=0.21",
+  "datasets>=3",
+  "huggingface-hub>=1.0",
+  "transformers>=5.13,<5.14",
+  "scipy>=1.11",
+]
 
 [project.optional-dependencies]
 prompt-generation = ["openai>=1.68"]
+legacy-flow = ["ptlflow==0.4.2", "opencv-python"]
+dev = ["pytest>=8", "black>=24"]
 
 [tool.setuptools.packages.find]
-include = ["flowsis*"]
+include = ["flowsis*", "event_flow*"]
 
 [project.scripts]
+event-flow = "event_flow.cli:main"
 flowsis-live-detector = "flowsis.cli.deploy.live_detector:main"
 flowsis-live-base = "flowsis.cli.deploy.live_base:main"
 flowsis-evaluate-detector = "flowsis.cli.eval.evaluate_detector:main"

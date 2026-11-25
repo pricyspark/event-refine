@@ -1,20 +1,22 @@
-name: flowsis
+# Default Event-Flow environment; clarified with Codex assistance.
+# Optical flow (PTLFlow) is optional and is not used by event_flow.
+name: event-flow
 channels:
   - conda-forge
 dependencies:
   - python=3.13
   - pip
-  - numpy
+  - setuptools>=69
+  - wheel
+  - numpy>=1.24
   - matplotlib
-  - pillow
-  - pytorch
-  - torchvision
+  - pillow>=10
+  - pytorch>=2.6
+  - torchvision>=0.21
+  - huggingface_hub>=1.0
   - transformers >=5.13,<5.14
   - accelerate
-  - datasets
-  - scipy
+  - datasets>=3
+  - scipy>=1.11
   - pytest
   - black
-  - pip:
-    - opencv-python
-    - ptlflow==0.4.2

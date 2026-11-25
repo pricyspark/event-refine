@@ -1,0 +1,86 @@
+{
+  "sequences": [
+    {
+      "id": "train/0",
+      "frames": 3233,
+      "npy_bytes": 2979946624,
+      "packed_npz_bytes": 10209759,
+      "packed_payload_bytes": 372441600,
+      "rgb_bytes": 366415294,
+      "plain_npz_sample_bytes": 435386,
+      "packed_npz_sample_bytes": 361747,
+      "sample_npy_bytes": 92172800,
+      "samples": 100
+    },
+    {
+      "id": "train/1",
+      "frames": 3399,
+      "npy_bytes": 3132953472,
+      "packed_npz_bytes": 10231763,
+      "packed_payload_bytes": 391564800,
+      "rgb_bytes": 381436536,
+      "plain_npz_sample_bytes": 340608,
+      "packed_npz_sample_bytes": 291468,
+      "sample_npy_bytes": 92172800,
+      "samples": 100
+    },
+    {
+      "id": "train/2",
+      "frames": 3411,
+      "npy_bytes": 3144014208,
+      "packed_npz_bytes": 6723790,
+      "packed_payload_bytes": 392947200,
+      "rgb_bytes": 373421257,
+      "plain_npz_sample_bytes": 252937,
+      "packed_npz_sample_bytes": 214511,
+      "sample_npy_bytes": 92172800,
+      "samples": 100
+    },
+    {
+      "id": "train/3",
+      "frames": 3439,
+      "npy_bytes": 3169822592,
+      "packed_npz_bytes": 10041545,
+      "packed_payload_bytes": 396172800,
+      "rgb_bytes": 478228788,
+      "plain_npz_sample_bytes": 366609,
+      "packed_npz_sample_bytes": 301766,
+      "sample_npy_bytes": 92172800,
+      "samples": 100
+    },
+    {
+      "id": "train/4",
+      "frames": 3460,
+      "npy_bytes": 3189178880,
+      "packed_npz_bytes": 9100125,
+      "packed_payload_bytes": 398592000,
+      "rgb_bytes": 480089838,
+      "plain_npz_sample_bytes": 329541,
+      "packed_npz_sample_bytes": 273896,
+      "sample_npy_bytes": 92172800,
+      "samples": 100
+    }
+  ],
+  "totals": {
+    "frames": 16942,
+    "npy_bytes": 15615915776,
+    "packed_npz_bytes": 46306982,
+    "packed_payload_bytes": 1951718400,
+    "rgb_bytes": 2079591713,
+    "plain_npz_sample_bytes": 1725081,
+    "packed_npz_sample_bytes": 1443388,
+    "sample_npy_bytes": 460864000,
+    "samples": 500
+  },
+  "seconds": 56.5320401880017,
+  "description": "All 16,942 event maps in the pinned FRED five-video import were packed/compressed in memory; original data was not changed. Sizes are logical file bytes, excluding filesystem allocation overhead.",
+  "revision": "980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd",
+  "codec": "np.packbits(bitorder=big) + np.savez_compressed; packed event format v1",
+  "savings": {
+    "bytes": 15569608794,
+    "percent": 99.70346291140243,
+    "ratio": 337.22594523650884,
+    "dataset_before_bytes": 17695507489,
+    "dataset_after_bytes": 2125898695
+  }
+}

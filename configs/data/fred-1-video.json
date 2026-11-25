@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "repo_id": "GabrieleMagrini/FRED",
+  "revision": "980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd",
+  "videos": [
+    {
+      "archive": "train/0.zip",
+      "split": "train",
+      "sha256": "2eabdec62d6d1d6f5c32614af7276db84361006a61cd818120fd9f5da36c3555",
+      "size_bytes": 450817254,
+      "frame_start": 0,
+      "frame_stop": null
+    }
+  ],
+  "preprocess": {
+    "event_background": [
+      30,
+      37,
+      52
+    ],
+    "event_palette": [
+      [
+        30,
+        37,
+        52
+      ],
+      [
+        64,
+        126,
+        200
+      ],
+      [
+        255,
+        255,
+        255
+      ]
+    ],
+    "boxes": "extended",
+    "clip_boxes": true,
+    "class_mapping": "single-drone",
+    "timestamp_source": "event_filename_us",
+    "missing_annotations": "unlabeled"
+  },
+  "assistance": "Codex"
+}
